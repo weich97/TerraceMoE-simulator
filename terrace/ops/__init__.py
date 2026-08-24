@@ -8,7 +8,7 @@
     i_send 直方图 + 发送缓冲 gather + gate gather),C1 quota 线格式,与现组合链
     逐位一致 —— 见下方 k1_arrival_ref 的可执行规格与
     ascendc/op_kernel/terrace_k1_arrival.cpp 的两遍法论证。
-K2(发送侧打包链)接口草案见文件底部注释与 README §5。
+K2(发送侧打包链)接口草案见文件底部注释与 构建脚本 ascendc/build.sh 的头注。
 
 开关语义(TERRACE_CUSTOM_OPS,进程启动时读一次):
   **未设 / "0"** -> 关。不尝试加载 .so,一切走现组合链(位级正确的已验路径)。
@@ -45,7 +45,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 # 加载成功后必须存在的算子名单。少一个都算加载失败(fail loud):宁可整体降级,
 # 也不要「.so 加载了但 schema 没注册」这种半死状态在首次调用时才炸。
 # k1_arrival 落地(2026-08-20)后,旧的仅含 passthrough 的 .so 会整体降级 ——
-# 有意如此:半新半旧的算子集在训练中途炸,比慢更糟。集群按 README §3 重编。
+# 有意如此:半新半旧的算子集在训练中途炸,比慢更糟。集群按 构建脚本 ascendc/build.sh 的头注 重编。
 _REQUIRED_OPS = ("passthrough", "k1_arrival")
 
 
@@ -104,7 +104,7 @@ def _find_library() -> str:
     hits = sorted(glob.glob(os.path.join(_LIB_DIR, "*.so")))
     if not hits:
         raise OpsLoadError(
-            f"{_LIB_DIR} 下没有 .so(本地无 CANN 属预期;集群按 README §3 编译)")
+            f"{_LIB_DIR} 下没有 .so(本地无 CANN 属预期;集群按 构建脚本 ascendc/build.sh 的头注 编译)")
     return hits[0]
 
 
@@ -325,7 +325,7 @@ def k1_arrival(rx: torch.Tensor, rslot: torch.Tensor, rgate: torch.Tensor,
 
     kernel 可用走定制算子(NPU),否则走组合链参考实现 —— 两条路径逐位同
     (tests/test_terrace_k1_arrival.py 把守 CPU 侧;NPU 位级由集群
-    bench/machine 冒烟把守,命令见 README §3.4)。调用方(ta2a_fwd /
+    bench/machine 冒烟把守,命令见 构建脚本 ascendc/build.sh 的头注)。调用方(ta2a_fwd /
     ta2a_dispatch 的接入点)自带 custom_ops_enabled() 闸,降级时走现链原文,
     不经此函数 —— 这里的回退是给直接调用/测试用的。
     """

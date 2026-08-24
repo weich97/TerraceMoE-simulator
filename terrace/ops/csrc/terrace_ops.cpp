@@ -28,7 +28,7 @@
 
 #include "acl/acl.h"
 // aclTensor 构造/销毁。个别 CANN 8.x 发行版头文件名不同:若编译报找不到,
-// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(README §6)。
+// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(构建脚本 ascendc/build.sh 的头注)。
 #include "aclnn/acl_meta.h"
 // opp vendor 包安装后生成的算子专属头(vendors/<vendor>/op_api/include)。
 #include "aclnn_terrace_passthrough.h"
@@ -74,7 +74,7 @@ at::Tensor passthrough_npu(const at::Tensor &x)
                                                        &executor);
     TORCH_CHECK(ret == ACL_SUCCESS,
                 "aclnnTerracePassthroughGetWorkspaceSize failed: ", ret,
-                " (host tiling 拒绝了这个形状? 样板要求 32B 整除,README §4)");
+                " (host tiling 拒绝了这个形状? 样板要求 32B 整除,构建脚本 ascendc/build.sh 的头注)");
 
     // workspace 用 torch 的 NPU 缓存分配器拿,免手工 aclrtMalloc/生命周期管理。
     at::Tensor workspace;

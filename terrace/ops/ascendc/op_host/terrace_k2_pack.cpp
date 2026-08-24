@@ -31,7 +31,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
 {
     TerraceK2PackTilingData tiling;
     auto platform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    uint32_t aivNum = platform.GetCoreNumAiv();   // 910C 实测为准(README §6)
+    uint32_t aivNum = platform.GetCoreNumAiv();   // 910C 实测为准(构建脚本 ascendc/build.sh 的头注)
     if (aivNum == 0) {
         return ge::GRAPH_FAILED;
     }

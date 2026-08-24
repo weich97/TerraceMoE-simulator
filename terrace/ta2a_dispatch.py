@@ -355,7 +355,7 @@ def ta2a_permute(hidden_states, probs, routing_map, *, world, rank, rpn,
         # A6:直方图对置换盲,owner 一出来就能算 —— 不必等排序。算完立刻把 Hop B 的
         # counts 交换**异步**发出去,用下面的排序 + 两次索引 gather + [pairs,H] 大 gather
         # 盖住它。纯调度重排:i_send 的值、alltoall 语义、i_recv 内容、下游逐位全不变。
-        # (依据:§7 证明"少发一条"价值为零,"挪到能被真实计算盖住的位置"才有收益。)
+        # (依据:内部实测证明"少发一条"价值为零,"挪到能被真实计算盖住的位置"才有收益。)
         i_send = fixed_hist(owner, rpn)          # 定长直方图,避开 bincount 的隐藏主机同步
         if sync_probe_enabled():
             _ = i_send.tolist()   # 判别探针:纯粹丢弃,只为付一次主机同步(见 sync_probe_enabled)

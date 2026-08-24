@@ -25,7 +25,7 @@
 
 #include "acl/acl.h"
 // aclTensor 构造/销毁。个别 CANN 8.x 发行版头文件名不同:若编译报找不到,
-// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(README §6)。
+// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(构建脚本 ascendc/build.sh 的头注)。
 #include "aclnn/acl_meta.h"
 // opp vendor 包安装后生成的算子专属头(vendors/<vendor>/op_api/include)。
 #include "aclnn_terrace_k2_pack.h"

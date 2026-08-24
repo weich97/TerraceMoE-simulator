@@ -1,7 +1,7 @@
 /**
  * terrace_passthrough -- host 侧:tiling 函数 + InferShape/InferDataType + 算子原型。
  *
- * 工程链路样板(README §3)。三块内容对应 msopgen 生成骨架里 op_host/ 下同名 stub
+ * 工程链路样板(构建脚本 ascendc/build.sh 的头注)。三块内容对应 msopgen 生成骨架里 op_host/ 下同名 stub
  * 的三个坑位,build.sh 会用本文件整体覆盖 stub。
  *
  * K1 正式实现时改这里:
@@ -38,7 +38,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         return ge::GRAPH_FAILED;
     }
     auto platform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    // 向量核数:910C 上须以实测为准(README §6 核实清单);样板信平台查询值。
+    // 向量核数:910C 上须以实测为准(构建脚本 ascendc/build.sh 的头注);样板信平台查询值。
     uint32_t aivNum = platform.GetCoreNumAiv();
     if (aivNum == 0) {
         return ge::GRAPH_FAILED;

@@ -1,4 +1,4 @@
-"""T-Route: terraced group-quota routing (docs/01 §3).
+"""T-Route: terraced group-quota routing(设计见 docs/01-troute-design.md).
 
 Selection uses bias-corrected affinities (aux-loss-free balancing); gate values
 use raw affinities. Structural guarantees, per token:

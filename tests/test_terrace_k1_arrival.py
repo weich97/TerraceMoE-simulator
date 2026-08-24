@@ -1,6 +1,6 @@
 """K1(terrace_k1_arrival,到达侧融合链)的 CPU 侧位级契约与接入开关语义。
 
-kernel 本体跑在集群 NPU 上(位级验证:README §3.4 的 k1 冒烟命令 +
+kernel 本体跑在集群 NPU 上(位级验证:构建脚本 ascendc/build.sh 的头注 的 k1 冒烟命令 +
 内部基准脚本(未随仓发布));本文件把守的是**本地能证的全部**:
 
   1. 可执行规格:terrace.ops.k1_arrival_ref(纯 torch,kernel 语义的逐位镜像)

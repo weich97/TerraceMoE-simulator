@@ -1,4 +1,4 @@
-"""Terraced-MoE layer (docs/01 §2).
+"""Terraced-MoE layer(设计见 docs/01-troute-design.md 与 docs/02-ta2a-design.md).
 
 Two interchangeable expert backends producing identical results:
   * "loop"    — reference: iterate experts, index_add. Correctness oracle, CPU.

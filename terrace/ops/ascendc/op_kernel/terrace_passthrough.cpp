@@ -3,7 +3,7 @@
  *
  * 语义:y = x,逐元素原样拷出。存在的唯一理由是把
  *   msopgen 工程 -> opp 包 -> aclnn -> torch.library
- * 这条链在集群上端到端编译并跑通(README §3)。**K1/K2 的 kernel 本体不在这里**,
+ * 这条链在集群上端到端编译并跑通(构建脚本 ascendc/build.sh 的头注)。**K1/K2 的 kernel 本体不在这里**,
  * 明天按 C1 落地后的链另起文件(k1_arrival.cpp / k2_pack.cpp),本文件保留作
  * 全链路冒烟基准。
  *
