@@ -42,7 +42,7 @@ def _g(name, ng, R, k, M, mbs, layers=19):
 
 HOLDOUTS = [
     # flag:base 档 n=5 组的代表对(内部实测记录);作**标定点**
-    Holdout(_g("flag", 16, 8, 6, 2, 1), 4350.0, 1.0281, "calibration"),
+    Holdout(_g("flag", 16, 8, 6, 2, 1), 4416.7, 1.0327, "calibration"),  # n=6 均值(t≈2.6, p≈0.047)
     # 保留验证点
     Holdout(_g("tok2x", 16, 8, 6, 2, 2), 3343.6, 0.8845, "holdout"),   # 三发均值,散布 0.8%   # 两发均值 内部实测记录
     Holdout(_g("tok4x", 16, 8, 6, 2, 4), 2992.7, 0.8234, "holdout"),   # 三发均值,散布 0.6%
