@@ -1,0 +1,14 @@
+TerraceMoE-public
+Copyright 2026 the TerraceMoE authors
+
+This product includes software developed by the TerraceMoE authors,
+licensed under the Apache License, Version 2.0.
+
+The AscendC kernels under terrace/ops/ascendc/ follow the three-stage
+(CopyIn/Compute/CopyOut) programming paradigm demonstrated by the
+"AddCustom" operator sample in the Ascend samples repository
+(https://gitee.com/ascend/samples), Copyright Huawei Technologies Co., Ltd.,
+licensed under the Apache License, Version 2.0. The kernel implementations
+in this repository were written independently; structural idioms and
+identifier conventions (e.g. the VECIN/VECOUT queue pairing) follow the
+platform's documented programming model.

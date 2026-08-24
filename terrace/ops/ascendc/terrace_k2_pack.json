@@ -1,0 +1,80 @@
+[
+    {
+        "op": "TerraceK2Pack",
+        "language": "cpp",
+        "input_desc": [
+            {
+                "name": "hidden",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "expert_idx",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "gates",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            }
+        ],
+        "output_desc": [
+            {
+                "name": "payload",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "mask",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "gate_rows",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "u_src",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "node_counts",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            }
+        ],
+        "attr": [
+            {
+                "name": "world",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "n_experts",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "rpn",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "groups_m",
+                "param_type": "required",
+                "type": "int"
+            }
+        ]
+    }
+]

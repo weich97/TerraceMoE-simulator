@@ -1,0 +1,80 @@
+[
+    {
+        "op": "TerraceK1Arrival",
+        "language": "cpp",
+        "input_desc": [
+            {
+                "name": "rx",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "rslot",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "rgate",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            }
+        ],
+        "output_desc": [
+            {
+                "name": "send_buf",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "gate_pairs",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["fp16", "bf16", "float"]
+            },
+            {
+                "name": "r_idx",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "slot_idx",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            },
+            {
+                "name": "i_send",
+                "param_type": "required",
+                "format": ["ND", "ND", "ND"],
+                "type": ["int64", "int64", "int64"]
+            }
+        ],
+        "attr": [
+            {
+                "name": "quota",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "epr",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "rpn",
+                "param_type": "required",
+                "type": "int"
+            },
+            {
+                "name": "my_local",
+                "param_type": "required",
+                "type": "int"
+            }
+        ]
+    }
+]
