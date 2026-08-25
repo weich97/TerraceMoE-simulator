@@ -325,7 +325,7 @@ def k1_arrival(rx: torch.Tensor, rslot: torch.Tensor, rgate: torch.Tensor,
 
     kernel 可用走定制算子(NPU),否则走组合链参考实现 —— 两条路径逐位同
     (tests/test_terrace_k1_arrival.py 把守 CPU 侧;NPU 位级由集群
-    bench/machine 冒烟把守,命令见 构建脚本 ascendc/build.sh 的头注)。调用方(ta2a_fwd /
+    设备冒烟测试把守,命令见构建脚本 ascendc/build.sh 的头注)。调用方(ta2a_fwd /
     ta2a_dispatch 的接入点)自带 custom_ops_enabled() 闸,降级时走现链原文,
     不经此函数 —— 这里的回退是给直接调用/测试用的。
     """

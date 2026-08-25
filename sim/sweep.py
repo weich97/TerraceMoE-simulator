@@ -12,13 +12,13 @@
 """
 from __future__ import annotations
 
-from .calibrate import aug_flat, synthetic
+from .calibrate import CHAIN_US_PER_ROW, aug_flat, synthetic
 from .core import MoEGeometry, one_hop_call, two_hop_call
 from .validate import validate
 from .validate_micro import validate_micro
 
 CHAIN_SCENARIOS = [
-    ("PyTorch 链(实测)", 2.15 * 1000.0 / 24576.0),
+    ("PyTorch 链(实测)", CHAIN_US_PER_ROW),   # 单一出处:标定层
     ("融合 kernel(估)", 0.012),
     ("零实现开销(上界)", 0.0),
 ]

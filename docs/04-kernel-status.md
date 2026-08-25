@@ -13,11 +13,25 @@
 
 `TERRACE_CUSTOM_OPS` 未设或为 0 时,一切走 CPU/组合链参考实现,**位级等价、零行为变化**——kernel 是纯加速件,不是正确性依赖。**默认是关**:能编译 ≠ 算得对,启用融合算子必须显式设 `TERRACE_CUSTOM_OPS=1`(理由:我们经历过"未过位级校验的 kernel 因编译成功而自动上线"的事故,默认开会把构建成功当成行为正确的证据)。
 
-## K1 的已知 bug(如实交代,欢迎修)
+## K1 的已知 bug(定位已到手术精度,欢迎修)
 
-- 症状:最小几何(1 行输入)上 `slot_idx`/`gate_pairs` 各 2/3 元素错,伴随设备侧 MTE 地址越界异常;
-- 已排除:两遍法算法本身(CPU 逐字模拟 30 组配置全部逐位一致,无重复写、无越界——模拟器见私有工具,规格测试在 `tests/test_terrace_k1_arrival.py`)、缓冲尺寸推导、DataCopy 对齐、tiling 字段错位;
-- 结论:bug 在 AscendC 翻译层(索引/类型/分核之一),不在算法。修复者从 `k1_arrival_ref`(逐位规格)对照 `op_kernel/terrace_k1_arrival.cpp` 入手最快。
+诊断分两步走完:
+
+1. **MTE 越界异常已除**:根因是 GM→UB→GM 搬运缺 VECOUT 队列(见下方教训 1),
+   补上后设备异常消失。
+2. **剩余错误钉死在「非 core 0 的标量 GM 写不可见」**。带 dump 的一发给出三条
+   互斥证据:
+   - `send_buf`(MTE 搬运路径)**0 错** —— 载荷全对;
+   - `i_send`(仅 core 0 做标量写)**0 错** —— 第一遍计数全对;
+   - `slot_idx`/`gate_pairs`/`r_idx`(各 core 各自标量写)错的位置**恰好是
+     非 core 0 负责的 dst**(1 行输入时错在 [1,2],2 行输入时错在 [1,4,5];
+     两次 dump 都是多核运行,变化轴是输入行数)。
+   MTE 路全对 + 单核标量写全对 + 多核标量写选择性丢 ⇒
+   `GlobalTensor::SetValue` 的跨核可见性问题。
+- **修法方向**:元数据写从标量 `SetValue` 改走 UB 缓冲 + `DataCopy`(MTE3)——
+  与载荷同一条已被证明可见的路径。
+- 修复者从 `k1_arrival_ref`(逐位规格,`tests/test_terrace_k1_arrival.py` 把守)
+  对照 `op_kernel/terrace_k1_arrival.cpp` 入手最快。
 
 ## 三条移植性教训(写给改 kernel 的人)
 

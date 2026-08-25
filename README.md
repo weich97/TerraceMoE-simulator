@@ -66,12 +66,13 @@ R=8 时:q=2 → 1.75,q=3 → 1.31,q=6 → 1.05,q=8 → 1.00。
 | 路径 | 内容 | 状态 |
 |---|---|---|
 | `terrace/routing.py` | T-Route 参考实现,四种消融模式同一函数切换 | **已验证**(质量消融 + 性质测试) |
-| `terrace/ta2a*.py` | T-A2A 两跳链:计划、派发、打包、可微接缝 | **已验证位级正确**(由全仓 274 条 CPU 测试把守;端到端只在扁平超节点测过,见判据) |
-| `terrace/ops/` | 到达链融合算子(AscendC):passthrough / K1 / K2 + CPU 可执行规格 | passthrough 设备位级验证通过;**K1 算法已证正确、设备端翻译有一处未修的越界 bug;K2 未上机验证**(见 [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
-| `sim/` | 实测标定的通信仿真器:集群规格 → 一跳/两跳耗时与外推(见 [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1(通信微观)验证门通过**(误差中位 8.1%);Tier-2(端到端步级)如实标注不通过,步级外推封禁 |
+| `terrace/ta2a*.py` | T-A2A 两跳链:计划、派发、打包、可微接缝 | **已验证位级正确**(由全仓 280 条 CPU 测试把守;端到端只在扁平超节点测过,见判据) |
+| `terrace/ops/` | 到达链融合算子(AscendC):passthrough / K1 / K2 + CPU 可执行规格 | passthrough 设备位级验证通过;**K1 算法已证正确、设备端翻译有一处未修的多核标量写可见性 bug(早先的越界已修);K2 未上机验证**(见 [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
+| `sim/` | 实测标定的通信仿真器:集群规格 → 一跳/两跳耗时、breakeven 地图、蒙特卡洛误差带(见 [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1(通信微观)验证门通过**(误差中位 8.1%);Tier-2(端到端步级)如实标注不通过,步级外推封禁 —— 六族重叠模型的系统化负结果与破局测量协议见 [docs/07-tier2-overlap.md](docs/07-tier2-overlap.md) |
 | `tools/breakeven.py` | 适用判据(解析式;与 sim/ 是同一套账的两条独立实现,测试互证) | — |
-| `tests/` | 274 条测试,纯 CPU 可跑(不需要 NPU) | 全绿 |
-| `docs/` | 设计文档 ×5 + 消融结果全集(docs/06,图先行) | — |
+| `tests/` | 280 条测试,纯 CPU 可跑(不需要 NPU) | 全绿 |
+| `tools/onesided/` | 单边传输量具:aclshmem put vs 集合 a2a 的预注册基准 + hyper-parallel 补丁(free 串行化+UAF、block_dim 写死)与 EQ 使用陷阱 | 在带宽扁平机上判负(最好 0.68× a2a,见 [docs/08-onesided.md](docs/08-onesided.md));补丁对所有 Ascend+shmem 用户适用 |
+| `docs/` | 设计文档 ×5 + 消融结果全集(docs/06)+ Tier-2 攻坚(docs/07)+ 单边判负(docs/08),图先行 | — |
 | `tools/gen_figures.py` | 结果图生成(数字内嵌,图可复现) | — |
 
 **不在本仓库**:训练框架接入(上游训练栈/Megatron 垫片)、集群与测量脚本、实验原始数据、内部记录。接缝契约见 [docs/02-ta2a-design.md](docs/02-ta2a-design.md),接入方按契约自写垫片。
