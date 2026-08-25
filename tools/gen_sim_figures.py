@@ -158,32 +158,63 @@ fig.tight_layout()
 fig.savefig(os.path.join(OUT, "f9-uncertainty.svg"), metadata={"Date": None}, bbox_inches="tight")
 plt.close(fig)
 
-# ------------------------------------------------------- F10 scale effect and where α comes from
-fig, ax = plt.subplots(figsize=(8.2, 4.2))
-worlds = [32, 64, 128, 256, 512]
-for like_meas, col, lab in ((True, "#3A7D5C", "α = shape measured on this machine (>128 are borrowed points)"),
-                            (False, "#8A8F98", "α = flat 0.05 ms (counterfactual machine)")):
-    ys = []
-    for w in worlds:
-        ng = w // 8
-        c = synthetic(3.2, alpha_like_measured=like_meas,
-                      chain_us_per_row=CHAIN_SCENARIOS[1][1])
-        g = MoEGeometry(name="scale", n_groups=ng, R=8, k=6, M=2,
-                        seq=4096, mbs=1, gbs=w * 4096)
-        ys.append(one_hop_call(c, g) / two_hop_call(c, g))
-    ax.plot(worlds, ys, "o-", color=col, lw=1.8, ms=5, label=lab)
-ax.axvspan(128, 512, color="#C4823B", alpha=0.10)
-ax.text(256, ax.get_ylim()[0] + 0.06, "α(256)/α(512) is a borrowed curve shape\n"
-        "-- conclusions there swing with the α source;\nrecalibrate on any new machine",
-        color="#9A6B2F", fontsize=8.5, ha="center")
+# ------------------------------------------------------- F10 scale effect: what the data does and does not support
+# alpha is direct-measured at worlds 8, 16 and 128. Nothing in the corpus measures
+# 256 or 512 except one dataset that sits 5x below every other in absolute
+# bandwidth and that the cost model fits worst -- so past 128 ranks the curve is
+# drawn as a band over four defensible treatments of alpha, not as a line.
+ALPHA_TREATMENTS = {
+    "same-corpus refit": {256: 0.425, 512: 2.888},
+    "borrowed points (previously shipped)": {256: 0.735, 512: 1.859},
+    "no growth past 128": {256: 0.378, 512: 0.378},
+    "linear in peers past 128": {256: 0.378 + 0.0107 * 128,
+                                 512: 0.378 + 0.0107 * 384},
+}
+MEASURED_W = [32, 64, 128]
+EXTRAP_W = [128, 256, 512]
+
+
+def _scale_ratio(alpha_pts, w):
+    c = synthetic(3.2, chain_us_per_row=CHAIN_SCENARIOS[1][1])
+    for lvl in (c.fast, c.slow, c.flat):
+        lvl.alpha_pts = alpha_pts
+    g = MoEGeometry(name="scale", n_groups=w // 8, R=8, k=6, M=2,
+                    seq=4096, mbs=1, gbs=w * 4096)
+    return one_hop_call(c, g) / two_hop_call(c, g)
+
+
+base_alpha = dict(synthetic(3.2).fast.alpha_pts)
+fig, ax = plt.subplots(figsize=(8.4, 4.4))
+measured_y = [_scale_ratio(sorted(base_alpha.items()), w) for w in MEASURED_W]
+ax.plot(MEASURED_W, measured_y, "o-", color="#3A7D5C", lw=2.2, ms=6,
+        label="direct-measured α (worlds 8/16/128)", zorder=3)
+
+curves = {}
+for lab, override in ALPHA_TREATMENTS.items():
+    pts = sorted({**base_alpha, **override}.items())
+    curves[lab] = [_scale_ratio(pts, w) for w in EXTRAP_W]
+lo = [min(c[i] for c in curves.values()) for i in range(len(EXTRAP_W))]
+hi = [max(c[i] for c in curves.values()) for i in range(len(EXTRAP_W))]
+ax.fill_between(EXTRAP_W, lo, hi, color="#C4823B", alpha=0.22, zorder=1,
+                label="past 128: spread over four defensible α treatments")
+for lab, ys in curves.items():
+    ax.plot(EXTRAP_W, ys, "--", color="#9A6B2F", lw=1.0, alpha=0.85, zorder=2)
+    ax.annotate(lab, xy=(512, ys[-1]), xytext=(4, 0), textcoords="offset points",
+                fontsize=7.3, color="#7A5322", va="center")
+
+ax.axvline(128, color="#333", lw=0.9, ls=":")
 ax.axhline(1.0, color="#333", lw=1)
 ax.set_xscale("log", base=2)
-ax.set_xticks(worlds)
-ax.set_xticklabels([str(w) for w in worlds])
+ax.set_xticks([32, 64, 128, 256, 512])
+ax.set_xticklabels(["32", "64", "128", "256", "512"])
+ax.set_xlim(30, 1250)
 ax.set_xlabel("Total dies (groups × 8; hierarchy ratio fixed at 3.2, fused-kernel tier)")
 ax.set_ylabel("one-hop time / two-hop time")
-ax.set_title("Scale effect: on large clusters two-hop's extra edge\ncomes mostly from the growth of α(world)\n"
-             "-- and the α shape is a machine property, not a topology property", fontsize=10.5)
+ax.set_title("Scale effect, and where the data stops: through 128 dies every α treatment\n"
+             "agrees to the digit (%.2f / %.2f / %.2f); at 512 they span %.2f-%.2f -- the direction\n"
+             "itself flips, so this repo makes no claim about clusters past 128 ranks"
+             % (measured_y[0], measured_y[1], measured_y[2], lo[-1], hi[-1]),
+             fontsize=10)
 ax.legend(frameon=False, fontsize=8.5, loc="upper left")
 _style(ax)
 fig.tight_layout()

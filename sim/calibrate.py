@@ -24,9 +24,22 @@ from .core import ClusterSpec, Level
 
 # alpha(world) [ms]: fixed overhead per collective call.
 #   The 8 / 16 / 128 points are direct measurements on this machine (1 token/rank tier,
-#   median of two runs); 256 / 512 borrow another machine's curve shape, rescaled through
-#   this machine's 128 point (only synthetic large clusters use them; sensitivity is
-#   reported whenever they are used). The direct measurements also give one important
+#   median of two runs).
+#
+#   **The 256 and 512 entries are low confidence and no conclusion may rest on them.**
+#   A later audit of every size sweep we own (331 usable a2a points over four datasets
+#   and two machines) found that the only corpus covering worlds above 128 is also the
+#   corpus whose absolute bandwidth sits ~5x below every other one and that the cost
+#   model fits worst -- 40% median relative error, against 5-11% everywhere else.
+#   Re-fitting that same corpus yields alpha(256)=0.425 and alpha(512)=2.888, nowhere
+#   near the entries below. Propagating four defensible treatments of these two points
+#   through the scale extrapolation leaves the ratio at 512 dies anywhere in 1.37-2.94,
+#   and the sign of the trend flips between treatments (figure F10 plots that band).
+#   Conclusions in this repository are therefore stated for worlds <= 128 only, where
+#   every treatment agrees to the digit. These two entries stay in the table so that
+#   synthetic large clusters remain runnable, not because they are trustworthy.
+#
+#   The direct measurements also give one important
 #   fact: **on this machine alpha(16)+alpha(8) ≈ alpha(128)** -- two-hop saves almost
 #   nothing on alpha. Whether alpha is savable is a machine property; do not assume it
 #   across machines.

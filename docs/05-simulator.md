@@ -105,20 +105,64 @@ Two robustness anchors:
 
 ![scale effects](assets/f10-scale-alpha.svg)
 
-Fix hierarchy ratio 3.2 and the fused tier, scale the cluster from 32 dies to 512 dies: the
-two-hop ratio goes from 1.47 (128 dies) to 1.94 (512 dies) — while the "flat-α counterfactual
-machine" control goes 1.44 → 1.38. **Nearly all of the extra advantage comes from α(world)
-growing with scale** (one-hop pays α(512)=1.86 ms, two-hop pays α(64)+α(8)≈0.36 ms), and this
-machine's α curve beyond 128 dies is a borrowed shape (shaded in the figure). The correct
-reading of the conclusion: **α shape is a machine property — whether two-hop gains extra on a
-large cluster requires re-calibrating α on any new machine.**
+Fix hierarchy ratio 3.2 and the fused tier, and scale the cluster up. Through **128 dies** the
+answer is solid: 1.68 → 1.52 → 1.47 at 32 / 64 / 128, and those three numbers are *identical to
+the digit* under every defensible treatment of α, because they use only the worlds we measured
+directly (8, 16, 128).
+
+**Past 128 dies this repository makes no claim.** An audit of every size sweep we own (331
+usable a2a points, four datasets, two machines) found that the single corpus covering worlds
+256 and 512 is also the corpus whose absolute bandwidth sits ~5× below all the others and which
+the cost model fits worst — 40% median relative error, against 5–11% everywhere else. Push four
+defensible treatments of those two α entries through the extrapolation and the 512-die ratio
+lands anywhere in **1.37 – 2.94**, with the *direction of the trend flipping* between them
+(under "no growth past 128" the ratio falls from 1.47 to 1.37). The figure plots that band
+rather than a line, and `tests/test_sim.py` pins both halves: insensitivity below 128, and a
+≥2× spread at 512 so the claim cannot be quietly re-hardened.
+
+What survives is the mechanism, not the magnitude: two-hop's large-cluster upside is bought
+with α(world) — one-hop pays α at the full world while two-hop pays α at two much smaller
+worlds — and **α's shape is a machine property**, so on any new machine this question reopens
+and must be re-measured, not inherited.
 
 Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.geometry_grid`)
-points the same way: the larger the world, the lower the breakeven; at 512 dies several
-geometries hit breakeven=1.0 (a pure α effect). Ranking the three axes by how far they actually
-move breakeven (fused tier): **implementation tier largest** (4.20 → 1.16, Δ≈3.0) > scale axis
-(32 → 512 dies, Δ≤1.9) > geometry axis ((k,M) moves ±0.2~0.3 at fixed world; under the PyTorch
-tier the geometry axis widens to ±1.2, but the ordering stands).
+is consistent with that mechanism, and carries the same caveat wherever it reaches past 128.
+Ranking the three axes by how far they actually move breakeven (fused tier): **implementation
+tier largest** (4.20 → 1.16, Δ≈3.0) > scale axis (Δ≤1.9, and only the ≤128 part of it is
+trustworthy) > geometry axis ((k,M) moves ±0.2~0.3 at fixed world; under the PyTorch tier the
+geometry axis widens to ±1.2, but the ordering stands).
+
+## Calibration audit: what 331 measured points say about the constants
+
+The shipped constants were distilled from one benchmark family. Re-fitting the
+parametric cost model against **every size sweep we own** — 331 usable a2a points
+across four datasets and two machines (`sim/fit.py`) — puts each constant on a
+different footing:
+
+| Constant | Verdict | Evidence |
+|---|---|---|
+| β (asymptotic bandwidth) | **corroborated** | fitted independently per dataset: 117.8 / 111.0 / 113.4 / 130.3 GB/s — spread narrower than the machine's own drift, and unchanged whether α is pinned or free |
+| α at worlds 8 / 16 / 128 | **corroborated** | direct measurements; every scale conclusion below 128 ranks is identical under all α treatments |
+| α at worlds 256 / 512 | **not supported** | only one corpus reaches them, and it is the corpus with 5× lower absolute bandwidth and 40% fit error vs 5–11% elsewhere — see the scale section above |
+| half-performance size `x_half` | **not identifiable** | trades off against α; moves 3–5× depending on whether α is pinned. Quote it only from a pinned-α fit |
+
+Two attempts that the data **rejected**, kept here because a rejected alternative
+is a result:
+
+- **Replacing the flat β with the fitted saturating curve fails Tier-1** (median
+  8.1% → 17.9%, worst 12.5% → 101.6%). The flat β stands.
+- **A world-scaling bandwidth term** (bandwidth degrading past ~128 ranks) is
+  visible in one dataset at matched per-peer size — roughly 0.55× at 256 and 0.36×
+  at 512 — but that is the same low-confidence dataset, so the term is recorded as
+  unconfirmed and deliberately left out of the model.
+
+And one inconsistency we **cannot** resolve offline: two of our own benchmark
+families disagree about the same machine in the same week, reporting ~0.39 ms
+against 0.52–0.65 ms at comparable per-peer sizes. The calibration and the Tier-1
+gate are both anchored to the first family, so the gate is internally consistent
+but not cross-validated. The second family is a drift study whose own run-to-run
+spread is 2.1–3.1× — wide enough to contain the disagreement without explaining
+it. Anyone recalibrating should run both styles and check they agree first.
 
 ## The Tier-2 step-level synthesis campaign record
 

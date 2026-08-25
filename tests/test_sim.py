@@ -186,3 +186,50 @@ def test_geometry_grid_bounds():
     rows = geometry_grid(CHAIN_SCENARIOS[1][1])
     assert len(rows) == 54
     assert all(1.0 <= be <= 3.0 for *_, be in rows),         "some geometry's breakeven is out of bounds: %s" % [r for r in rows if not 1.0 <= r[-1] <= 3.0]
+
+
+# ---------------------------------------------------------------- scale honesty
+
+
+def _scale_ratio(alpha_pts, w, ratio=3.2):
+    from sim.core import MoEGeometry, one_hop_call, two_hop_call
+    from sim.sweep import CHAIN_SCENARIOS
+    c = synthetic(ratio, chain_us_per_row=CHAIN_SCENARIOS[1][1])
+    for lvl in (c.fast, c.slow, c.flat):
+        lvl.alpha_pts = alpha_pts
+    g = MoEGeometry(name="scale", n_groups=w // 8, R=8, k=6, M=2,
+                    seq=4096, mbs=1, gbs=w * 4096)
+    return one_hop_call(c, g) / two_hop_call(c, g)
+
+
+ALPHA_TREATMENTS = [
+    {256: 0.425, 512: 2.888},                          # refit of the same corpus
+    {256: 0.735, 512: 1.859},                          # the shipped entries
+    {256: 0.378, 512: 0.378},                          # no growth past 128
+    {256: 0.378 + 0.0107 * 128, 512: 0.378 + 0.0107 * 384},   # linear in peers
+]
+
+
+def test_conclusions_hold_only_up_to_world_128():
+    """Below 128 ranks the scale result must not depend on the low-confidence
+    alpha entries; past 128 it must visibly depend on them.
+
+    This pins the honesty boundary itself. If someone re-hardens a claim about
+    large clusters, the second half of this test is what stops it: the spread at
+    512 ranks is the reason the repository refuses to make that claim.
+    """
+    from sim.calibrate import ALPHA_PTS
+    base = dict(ALPHA_PTS)
+    for w in (32, 64, 128):
+        vals = [_scale_ratio(sorted({**base, **ov}.items()), w)
+                for ov in ALPHA_TREATMENTS]
+        assert max(vals) - min(vals) < 1e-9, (
+            "world=%d must be insensitive to the >128 alpha entries, spread=%.4f"
+            % (w, max(vals) - min(vals)))
+    at512 = [_scale_ratio(sorted({**base, **ov}.items()), 512)
+             for ov in ALPHA_TREATMENTS]
+    assert max(at512) / min(at512) > 2.0, (
+        "the 512-rank spread collapsed to %.2fx. Either new measurements now "
+        "constrain alpha past 128 -- in which case update calibrate.py and this "
+        "test deliberately -- or the treatments were quietly narrowed."
+        % (max(at512) / min(at512)))
