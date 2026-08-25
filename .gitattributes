@@ -1,0 +1,9 @@
+# 全仓强制 LF 检出。理由(2026-08-25 干净克隆实测):Windows 上 autocrlf=true
+# 会把检出转成 CRLF,而本仓的 LF 纪律测试(它们守的是「CRLF 上集群即事故」)
+# 会当场红 23 条 —— 克隆者第一次跑测试就见红,是分发缺陷。
+# eol=lf 对 Linux/macOS 无感,对 Windows 修正检出;.sh/.py 上集群必须 LF。
+* text=auto eol=lf
+*.svg text eol=lf
+*.tgz binary
+*.bundle binary
+*.so binary
