@@ -243,3 +243,22 @@ def test_conclusions_hold_only_up_to_world_128():
         "constrain alpha past 128 -- in which case update calibrate.py and this "
         "test deliberately -- or the treatments were quietly narrowed."
         % (max(at512) / min(at512)))
+
+
+def test_tier1b_cross_corpus_gate_passes_on_both_machines():
+    """Tier-1b: the model must hold on a benchmark family it was not tuned against,
+    on the calibrated machine and on a second machine whose constants are re-fitted.
+
+    Machine B is the load-bearing half. Passing there is what licenses anyone else to
+    re-calibrate this model on their own hardware; if it ever fails, the claim that the
+    model *form* transfers has to be withdrawn, not patched.
+    """
+    from sim.calibrate import flat_supernode, second_machine
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, validate_sweep
+    ok_a, ia = validate_sweep(flat_supernode(), TARGETS_A, verbose=False)
+    ok_b, ib = validate_sweep(second_machine(), TARGETS_B, verbose=False)
+    assert len(TARGETS_A) == 6 and len(TARGETS_B) == 44
+    assert ok_a, "machine A: median %.3f bias %+.3f outliers %.2f" % (
+        ia["median"], ia["bias"], ia["outlier_fraction"])
+    assert ok_b, "machine B: median %.3f bias %+.3f outliers %.2f" % (
+        ib["median"], ib["bias"], ib["outlier_fraction"])

@@ -49,23 +49,25 @@ ALPHA_PTS = [(2, 0.09), (8, 0.111), (16, 0.157), (128, 0.378),
 # beta [GB/s] (aligned convention: per-peer bytes are integer multiples of the real row
 # width; unaligned sizes fall into implementation behavior that steps by powers of 2,
 # and you end up measuring the alignment effect, not the link -- we stepped on this).
-BETA_FLAT = 113.4    # 128-card full-fabric a2a: asymptotic bandwidth.
-                     #   Refitting every size sweep we own (see sim/fit.py) put this at
-                     #   117.8 / 111.0 / 113.4 / 130.3 GB/s across four independent
-                     #   datasets -- a spread narrower than the machine's own drift.
-                     #   The value used is the one from the corpus built to resolve size
-                     #   dependence (19 distinct sizes over 4.5 decades), the same corpus
-                     #   that fixes X_HALF_FLAT below; taking both from one well-conditioned
-                     #   dataset keeps the pair self-consistent.
+BETA_FLAT = 117.8    # 128-card full-fabric a2a: asymptotic bandwidth, fitted on **this
+                     #   machine's own** sweeps with alpha pinned (sim/fit.py). Refits of
+                     #   every corpus we own land at 117.8 here and 111.0-130.3 on a second
+                     #   machine of the same family -- a spread narrower than either
+                     #   machine's run-to-run drift, which is why beta is treated as
+                     #   transferable in a way alpha is not.
 
 # Half-performance message size for the full-fabric level: the per-peer size at which
 # the collective reaches half of BETA_FLAT. A single flat bandwidth over-credits small
 # messages, and the bias was visible -- the flat-only model ran 8-27% fast against every
 # sweep corpus, always the same sign.
-#   Estimated at 54 KiB, bootstrap 90% interval [30, 87] KiB, from the 19-size sweep;
-#   the coarse 5-6 size corpora cannot resolve this parameter and are not used for it.
+#   Estimated at 54 KiB, bootstrap 90% interval [30, 87] KiB. **This is a borrowed
+#   shape**: it comes from a 19-size sweep taken on the *second* machine, because this
+#   machine's own sweep corpus has only 6 sizes and cannot resolve the parameter. Same
+#   discipline as the alpha curve -- borrow the shape, never the level; the level
+#   (BETA_FLAT) is measured here. Sensitivity is reassuring rather than alarming: the
+#   whole bootstrap interval passes Tier-1 (30 KiB -> 2.5% median, 87 KiB -> 5.0%).
 #   **Estimated before looking at the gate**, then checked against it: Tier-1 median
-#   error improves from 8.1% to 4.5% and the gate still passes. Note the crossover
+#   error improves from 8.1% to 2.8% and the gate still passes. Note the crossover
 #   position moves to the upper edge of the preregistered window, so an x_half much
 #   above this interval would fail the gate -- see tests/test_sim.py.
 #   Fitting caveat (sim/fit.py): alpha and x_half trade off, so this number is only
@@ -111,6 +113,29 @@ def flat_supernode() -> ClusterSpec:
         fast=Level("node-internal", ALPHA_PTS, beta_fast),
         slow=Level("cross-node", ALPHA_PTS, beta_slow),
         flat=Level("full-fabric", ALPHA_PTS, beta_flat),
+        splits_sync_ms=SPLITS_SYNC_MS,
+        chain_us_per_row=CHAIN_US_PER_ROW,
+    )
+
+
+# Constants for a second machine of the same family, fitted the same way from its own
+# corpora with the shape pinned (sim/fit.py). They exist so Tier-1b can ask the question
+# that matters for anyone else adopting this: does the model *form* survive a change of
+# machine once its constants are re-fitted? Note how close the two machines land --
+# beta within 5%, alpha(128) 0.394 against 0.378 -- which is a fact about these two
+# machines, not a licence to skip re-calibration.
+SECOND_ALPHA_PTS = [(8, 0.130), (16, 0.141), (32, 0.252), (64, 0.231), (128, 0.394)]
+SECOND_BETA_FLAT = 111.9
+
+
+def second_machine() -> ClusterSpec:
+    """A second machine of the same family; every constant re-fitted, form unchanged."""
+    beta = saturating_beta(SECOND_BETA_FLAT, X_HALF_FLAT)
+    return ClusterSpec(
+        name="second_machine (re-fitted from its own corpora)", R=8,
+        fast=Level("node-internal", SECOND_ALPHA_PTS, beta),
+        slow=Level("cross-node", SECOND_ALPHA_PTS, beta),
+        flat=Level("full-fabric", SECOND_ALPHA_PTS, beta),
         splits_sync_ms=SPLITS_SYNC_MS,
         chain_us_per_row=CHAIN_US_PER_ROW,
     )
