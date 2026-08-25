@@ -20,7 +20,7 @@ measure  ->  calibrate  ->  validate  ->  extrapolate
    Two gate tiers, thresholds fixed ahead of the targets:
    - **Tier-1 (communication micro level)**: against directly measured one-hop/two-hop times on
      the same machine — median relative error ≤20%, max ≤35%, crossover position reproduced.
-     **Current: pass** (8.1% / 12.5% / 2048–4096).
+     **Current: pass** (3.6% / 25.6% / 4096–8192).
    - **Tier-2 (end-to-end step level)**: against measured G on 7 training geometries
      (1 calibration, 6 holdout; n4 is a scale-axis point added after preregistration).
      **Current: fail — step-level extrapolation stays locked.** The cause, named: the sum of
@@ -51,9 +51,9 @@ One-hop time / two-hop time (>1 = two-hop faster), 16 groups × R=8, k=6, T=4096
 
 | Implementation tier \ hierarchy ratio | 1.03 (flat) | 3.2 | 8 | 15.7 |
 |---|---|---|---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | 0.39 | 0.83 | 1.47 | 2.02 |
-| Fused kernel (est. 0.012) | 0.79 | 1.47 | 2.18 | 2.63 |
-| Zero implementation overhead (upper bound) | 0.94 | 1.68 | 2.36 | 2.77 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | 0.40 | 0.88 | 1.55 | 2.12 |
+| Fused kernel (est. 0.012) | 0.82 | 1.55 | 2.29 | 2.76 |
+| Zero implementation overhead (upper bound) | 0.98 | 1.76 | 2.47 | 2.89 |
 
 (q=3; for q=2/q=6 and all six hierarchy-ratio tiers, run `python -m sim.sweep` to compute them
 live — the table tracks the calibration; the doc stores only a snapshot.)
@@ -78,11 +78,11 @@ which two-hop starts to win, q=3, T=4096):
 
 | Implementation tier | breakeven hierarchy ratio |
 |---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | **4.20** |
-| Fused kernel (est. 0.012) | **1.57** |
-| Zero implementation overhead (upper bound) | 1.16 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | **3.87** |
+| Fused kernel (est. 0.012) | **1.45** |
+| Zero implementation overhead (upper bound) | 1.07 |
 
-One-sentence takeaway: **the implementation tier pulls breakeven from 4.2 down to 1.6** — on
+One-sentence takeaway: **the implementation tier pulls breakeven from 3.9 down to 1.5** — on
 common hierarchical machines like NVLink/IB (≈3.2), whether hierarchical communication is worth
 doing depends on how well your arrival chain is written, not on the topology.
 
@@ -95,10 +95,14 @@ run-to-run drift ±9~20%). 400 Monte Carlo draws propagate that spread into the 
 (provenance noted item by item, see `sim/uncertainty.py`; fixed seed, reruns match bit for bit).
 Two robustness anchors:
 
-- Flat column, most favorable case (zero implementation overhead): p95 = **0.99 ≤ 1** — our
-  negative verdict on the flat machine is robust to calibration error; but the margin is only
-  0.01, so the claim stops at this precision and gets no further embellishment;
-- 8× column, least favorable case (PyTorch chain): p5 = **1.37 > 1** — on hierarchical machines,
+- Flat column, most favorable case (zero implementation overhead): p95 = **1.04** — just above
+  1. Read it precisely: once bandwidth saturation is modelled, the *byte account alone* on a
+  flat fabric is close to neutral, so what actually makes two-hop lose there is the
+  implementation overhead that this tier deliberately sets to zero. The measured verdict on the
+  flat machine is unchanged (docs/03), and it is an implementation verdict, not a bytes verdict.
+  Under the fused tier — the best any real implementation has reached — the flat column stays
+  below 1;
+- 8× column, least favorable case (PyTorch chain): p5 = **1.45 > 1** — on hierarchical machines,
   the direction "two-hop wins" is robust to calibration error.
 
 ### Scale effects: where does the large-cluster advantage come from?
@@ -128,9 +132,9 @@ and must be re-measured, not inherited.
 Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.geometry_grid`)
 is consistent with that mechanism, and carries the same caveat wherever it reaches past 128.
 Ranking the three axes by how far they actually move breakeven (fused tier): **implementation
-tier largest** (4.20 → 1.16, Δ≈3.0) > scale axis (Δ≤1.9, and only the ≤128 part of it is
-trustworthy) > geometry axis ((k,M) moves ±0.2~0.3 at fixed world; under the PyTorch tier the
-geometry axis widens to ±1.2, but the ordering stands).
+tier largest** (3.87 → 1.07, Δ≈2.8) > scale axis (Δ≤1.9, and only the ≤128 part of it is
+trustworthy) > geometry axis ((k,M) moves up to 0.53 at fixed world; under the PyTorch tier the
+geometry axis widens to 1.62, but the ordering stands).
 
 ## Calibration audit: what 331 measured points say about the constants
 
@@ -146,23 +150,37 @@ different footing:
 | α at worlds 256 / 512 | **not supported** | only one corpus reaches them, and it is the corpus with 5× lower absolute bandwidth and 40% fit error vs 5–11% elsewhere — see the scale section above |
 | half-performance size `x_half` | **not identifiable** | trades off against α; moves 3–5× depending on whether α is pinned. Quote it only from a pinned-α fit |
 
-Two attempts that the data **rejected**, kept here because a rejected alternative
-is a result:
+### What changed, and the wrong turn on the way
 
-- **Replacing the flat β with the fitted saturating curve fails Tier-1** (median
-  8.1% → 17.9%, worst 12.5% → 101.6%). The flat β stands.
-- **A world-scaling bandwidth term** (bandwidth degrading past ~128 ranks) is
-  visible in one dataset at matched per-peer size — roughly 0.55× at 256 and 0.36×
-  at 512 — but that is the same low-confidence dataset, so the term is recorded as
-  unconfirmed and deliberately left out of the model.
+The flat β is gone: the full-fabric and cross-node levels now use
+β(x) = β∞·x/(x + x_half) with β∞ = 113.4 GB/s and x_half = 54 KiB. The intra-node
+level keeps a flat β, because its value is physics-endorsed (link aggregation,
+0.2% from measurement) and the sweep corpora never isolate it.
 
-And one inconsistency we **cannot** resolve offline: two of our own benchmark
-families disagree about the same machine in the same week, reporting ~0.39 ms
-against 0.52–0.65 ms at comparable per-peer sizes. The calibration and the Tier-1
-gate are both anchored to the first family, so the gate is internally consistent
-but not cross-validated. The second family is a drift study whose own run-to-run
-spread is 2.1–3.1× — wide enough to contain the disagreement without explaining
-it. Anyone recalibrating should run both styles and check they agree first.
+The result: **Tier-1 median error halves, 8.1% → 3.6%** (worst 12.5% → 25.6%,
+still inside the 35% gate), and cross-corpus error roughly halves as well. The
+extrapolated ratios move up 4–5% — two-hop's messages are larger per peer, so it
+suffers less from saturation than one-hop does.
+
+**The wrong turn is worth recording.** The first attempt at exactly this change
+*failed*: with x_half fitted at 320 KiB, Tier-1 went to 17.9% median and 101.6%
+worst. That x_half was fitted with α free, and α and x_half trade off against each
+other — so the parameter was meaningless, and the model form got blamed for it.
+Re-estimating with α pinned to its direct measurements, from the one corpus with
+enough distinct sizes to resolve the parameter (19 sizes over 4.5 decades, giving
+54 KiB with a bootstrap 90% interval of [30, 87]), the same model form halves the
+error instead. **A model form cannot be judged while one of its parameters is
+unidentified.**
+
+One term still **rejected**: a world-scaling bandwidth degradation past ~128 ranks
+is visible in one dataset at matched per-peer size (roughly 0.55× at 256 and 0.36×
+at 512), but that is the low-confidence dataset, so it is recorded as unconfirmed
+and stays out of the model.
+
+One caveat that survives: the crossover position moved to the upper edge of the
+preregistered window, so an x_half much above the fitted interval would fail the
+gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
+further drift shows up immediately.
 
 ## The Tier-2 step-level synthesis campaign record
 

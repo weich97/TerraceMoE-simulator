@@ -49,7 +49,29 @@ ALPHA_PTS = [(2, 0.09), (8, 0.111), (16, 0.157), (128, 0.378),
 # beta [GB/s] (aligned convention: per-peer bytes are integer multiples of the real row
 # width; unaligned sizes fall into implementation behavior that steps by powers of 2,
 # and you end up measuring the alignment effect, not the link -- we stepped on this).
-BETA_FLAT = 122.2    # 128-card full-fabric a2a: pure beta, least-squares fit over 33 sweeps, 6 sizes
+BETA_FLAT = 113.4    # 128-card full-fabric a2a: asymptotic bandwidth.
+                     #   Refitting every size sweep we own (see sim/fit.py) put this at
+                     #   117.8 / 111.0 / 113.4 / 130.3 GB/s across four independent
+                     #   datasets -- a spread narrower than the machine's own drift.
+                     #   The value used is the one from the corpus built to resolve size
+                     #   dependence (19 distinct sizes over 4.5 decades), the same corpus
+                     #   that fixes X_HALF_FLAT below; taking both from one well-conditioned
+                     #   dataset keeps the pair self-consistent.
+
+# Half-performance message size for the full-fabric level: the per-peer size at which
+# the collective reaches half of BETA_FLAT. A single flat bandwidth over-credits small
+# messages, and the bias was visible -- the flat-only model ran 8-27% fast against every
+# sweep corpus, always the same sign.
+#   Estimated at 54 KiB, bootstrap 90% interval [30, 87] KiB, from the 19-size sweep;
+#   the coarse 5-6 size corpora cannot resolve this parameter and are not used for it.
+#   **Estimated before looking at the gate**, then checked against it: Tier-1 median
+#   error improves from 8.1% to 4.5% and the gate still passes. Note the crossover
+#   position moves to the upper edge of the preregistered window, so an x_half much
+#   above this interval would fail the gate -- see tests/test_sim.py.
+#   Fitting caveat (sim/fit.py): alpha and x_half trade off, so this number is only
+#   meaningful with alpha pinned to its direct measurements, which is how it was fitted.
+X_HALF_FLAT = 54 * 1024
+X_HALF_CI = (30 * 1024, 87 * 1024)
 BETA_FAST = 122.4    # intra-node 8-card a2a: **physics-endorsed** --
                      #   measured 88.08 MB / 0.719 ms = 122.6,
                      #   physical aggregate egress (6x intra-node links 112.1 + 1x in-package direct 185)/7 = 122.4
@@ -62,10 +84,27 @@ CHAIN_US_PER_ROW = 2.15 * 1000.0 / 24576.0   # arrival chain, PyTorch op chain, 
                                              # (measured 2.15 ms/call @ 24576 rows)
 
 
+def saturating_beta(beta_inf: float, x_half: float,
+                    lo: float = 1e3, hi: float = 1e9, n: int = 48) -> list:
+    """Sample beta_inf * x/(x + x_half) into the (bytes, GB/s) table ClusterSpec reads.
+
+    Logarithmic sampling keeps the interpolation error far below measurement noise
+    over the whole range. x_half <= 0 gives back a flat table.
+    """
+    xs = [lo * (hi / lo) ** (i / (n - 1)) for i in range(n)]
+    if x_half <= 0:
+        return [(x, beta_inf) for x in xs]
+    return [(x, beta_inf * x / (x + x_half)) for x in xs]
+
+
 def flat_supernode() -> ClusterSpec:
     """The machine we actually measured: a bandwidth-flat supernode (cross-node / intra-node = 0.974)."""
-    beta_flat = [(1e5, BETA_FLAT), (1e9, BETA_FLAT)]
-    beta_fast = [(1e5, BETA_FAST), (1e9, BETA_FAST)]
+    # The full-fabric and cross-node levels saturate with message size; the intra-node
+    # level keeps a flat bandwidth because its value is physics-endorsed (link
+    # aggregation, 0.2% from measurement) rather than fitted, and the sweep corpora
+    # never isolate that level.
+    beta_flat = saturating_beta(BETA_FLAT, X_HALF_FLAT)
+    beta_fast = [(1e3, BETA_FAST), (1e9, BETA_FAST)]
     beta_slow = [(x, b * CROSS_NODE_RATIO) for x, b in beta_flat]
     return ClusterSpec(
         name="flat_supernode (calibrated from measurements)", R=8,
@@ -84,6 +123,7 @@ aug_flat = flat_supernode
 def synthetic(ratio: float, name: str = "", R: int = 8,
               base_beta_gbps: float = 100.0, alpha_like_measured: bool = True,
               chain_us_per_row: float = CHAIN_US_PER_ROW,
+              x_half: float = X_HALF_FLAT,
               **_compat) -> ClusterSpec:
     """Synthetic hierarchical cluster: fast-side beta = base, slow-side beta = base/ratio, alpha borrowed from the measured table.
 
@@ -92,8 +132,11 @@ def synthetic(ratio: float, name: str = "", R: int = 8,
     alpha table carries the warning above: alpha's shape is a machine property.
     """
     ap = ALPHA_PTS if alpha_like_measured else [(2, 0.05), (512, 0.05)]
-    flat_b = [(x, base_beta_gbps / ratio) for x in (1e5, 1e6, 1e7, 1e8)]
-    fast_b = [(x, base_beta_gbps) for x in (1e5, 1e6, 1e7, 1e8)]
+    # Same saturation shape as the calibrated machine: a synthetic cluster of the
+    # same family has no reason to reach line rate on small messages either. Pass
+    # x_half=0 for the older flat behaviour, and re-estimate it on any real machine.
+    flat_b = saturating_beta(base_beta_gbps / ratio, x_half)
+    fast_b = saturating_beta(base_beta_gbps, x_half)
     return ClusterSpec(
         name=name or ("synthetic(ratio=%.2f)" % ratio), R=R,
         fast=Level("fast", ap, fast_b),

@@ -46,12 +46,16 @@ PERTURB = [
     ("beta_fast", 0.995, 1.005, "run-to-run spread <0.3% (measured, physics-endorsed tier)"),
     ("splits", 0.95, 1.05, "measured range 0.042-0.046"),
     ("chain", 0.90, 1.10, "assumption: tensor chain drifts less than communication"),
+    ("x_half", 30.0 / 54.0, 87.0 / 54.0,
+     "half-performance size: bootstrap 90% interval [30, 87] KiB around 54 (measured)"),
 ]
 
 
 def _perturbed(ratio: float, chain: float, f: dict):
     """Build the perturbed synthetic cluster for one set of factors."""
-    c = synthetic(ratio, chain_us_per_row=chain * f["chain"])
+    from .calibrate import X_HALF_FLAT
+    c = synthetic(ratio, chain_us_per_row=chain * f["chain"],
+                  x_half=X_HALF_FLAT * f["x_half"])
     # alpha: one factor for the whole curve; beta: separate fast/slow factors
     # (see the convention table in the module docstring)
     for lvl, bf in ((c.fast, f["beta_fast"]), (c.slow, f["beta_slow"]),

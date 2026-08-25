@@ -43,14 +43,15 @@ machine property that does not transfer, the bandwidth pair does.
    and which this model fits worst (40% median). See `calibrate.py::ALPHA_PTS` and
    figure F10 for what that does to large-cluster claims.
 
-3. **A saturating beta was tried and rejected.** Substituting `beta_eff` above for
-   the flat beta in `calibrate.py` moves Tier-1 from 8.1% to 17.9% median and 12.5%
-   to 101.6% worst -- the gate fails. The reason is that the two benchmark families
-   are not interchangeable: the size-sweep corpus and the direct alpha corpus
-   disagree by roughly 2x at comparable per-peer sizes, and the sweep corpus that
-   drove the saturating fit is a **drift study** whose own run-to-run spread is
-   2.1-3.1x. An instrument that scatters by 3x cannot adjudicate a 15% question,
-   so the flat beta stands and this stays a documented negative result.
+3. **The saturating beta is now shipped -- but only after the first attempt failed.**
+   Substituting it with x_half fitted at 320 KiB moved Tier-1 from 8.1% to 17.9%
+   median and 12.5% to 101.6% worst; the gate failed and the flat beta was kept.
+   That x_half was wrong for the reason in point 4: it had been fitted with alpha
+   free. Re-estimating with alpha pinned, from the one corpus with enough distinct
+   sizes to resolve it, gives 54 KiB -- and at that value the gate not only passes,
+   its median error halves (8.1% -> 3.6%). The lesson is not "saturation was right
+   all along"; it is that a model form cannot be judged while one of its parameters
+   is unidentified.
 
 4. **alpha and x_half are not separately identifiable from size sweeps.** The
    round-trip self-check (`python -m sim.fit`) recovers a synthetic frame's

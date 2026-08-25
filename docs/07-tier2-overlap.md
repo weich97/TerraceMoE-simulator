@@ -16,10 +16,10 @@ All figure numbers are produced live by `python -m sim.overlap`; the script is t
 
 | Family | Structure (Δ = predicted two-hop step delta) | Parameter (solved from flag) | Holdout MAE | within ±0.035 | negative-sign direction | Gate |
 |---|---|---|---|---|---|---|
-| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | 0.141 | 0/6 | 5/5 | fail |
-| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.149 | 0.149 | 0/6 | 0/5 | fail |
-| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 2.57 ms | 0.065 | 4/6 | 3/5 | fail |
-| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.17 | 0.140 | 0/6 | 0/5 | fail |
+| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | 0.135 | 0/6 | 5/5 | fail |
+| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.149 | 0.150 | 0/6 | 0/5 | fail |
+| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 2.47 ms | 0.062 | 4/6 | 3/5 | fail |
+| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.12 | 0.136 | 0/6 | 0/5 | fail |
 | M4 | hiding ∝ compute: Δ = Δmodel − c·T_comp | c = 0.302 | **0.048** | 2/6 | **5/5** | fail |
 | M5 | exposure ∝ pipeline pressure: Δ = Δmodel·(1−λ/mbs) | λ = 1.149 | 0.087 | 2/6 | 2/5 | fail |
 
@@ -28,7 +28,7 @@ Fitting used only the calibration point flag; the six holdout points never parti
 
 Two reading notes:
 
-- **The closest in magnitude (M2, MAE 0.065) flips sign on the scale axis**: it predicts
+- **The closest in magnitude (M2, MAE 0.062) flips sign on the scale axis**: it predicts
   two-hop winning at n8/n4, while measurement shows two-hop losing badly (G=0.90/0.86). The
   picture of hiding a fixed number of milliseconds per call over-hides once the call count doubles.
 - **The one with perfect direction (M4, 5/5) misses the magnitude gate by 2×**: the picture of
@@ -105,4 +105,4 @@ while the holdout points need a machine allocation at target scale.
   bandwidth ledger is validated separately at the micro level (docs/05, median error 8.1%).
 - This doc's negative result is confined to "step-level synthesis": do **not** treat the
   communication-level ratios of docs/05 as end-to-end speedups — that is exactly M0's mistake
-  (MAE 0.141).
+  (MAE 0.135).
