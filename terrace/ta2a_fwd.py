@@ -31,7 +31,7 @@ from . import ops as _tops
 # The intra-node subgroup is created once (new_group is collective and expensive); the
 # forward is called per layer per step, so creating it inline would deadlock or crawl.
 _INTRA_GROUP = [None]
-_INTER_GROUP = [None]   # 跨节点子组:同一 local index 跨所有节点(见 init_ta2a_groups)
+_INTER_GROUP = [None]   # inter-node subgroup: same local index across all nodes (see init_ta2a_groups)
 _POW2_CACHE: dict = {}
 _TIEBREAK_CACHE: dict = {}
 
@@ -67,8 +67,8 @@ def _pow2_table(slots: int, dev, dtype) -> torch.Tensor:
     FLOATING-POINT pow, which the NPU evaluates as exp2/log and returns 32767.99985 for
     2**15. Truncating that to int64 loses one bit and every affected mask comes out
     exactly 1 too small -- which is what it did, silently, until a device-side
-    equivalence check caught it (内部基准脚本(未随仓发布); the CPU unit tests
-    all passed). Integer pow is exact, and int -> float32 is exact for powers of two well
+    equivalence check caught it (internal benchmark script, not shipped with the repo;
+    the CPU unit tests all passed). Integer pow is exact, and int -> float32 is exact for powers of two well
     past 2**24; it is only their SUM that is not (see build_expansion's mdtype boundary).
     """
     key = (dev, slots, dtype)
@@ -221,7 +221,8 @@ def _pack_quota_wire(expert_idx, gates, inverse, payload, n_rows: int, slots: in
     packing -- the same point the sparse plane rounded at), and a gates/payload
     dtype mismatch must keep failing loudly in the index_put, exactly as the
     [n_rows, slots] plane failed. Deriving the plane from `gates` would silently
-    ship a wider gate plane instead -- the 一次内部提交 drift bug's entry point.
+    ship a wider gate plane instead -- the entry point of the drift bug fixed in an
+    internal commit.
     """
     T, k = expert_idx.shape
     if sorted_rows:
@@ -266,44 +267,53 @@ def _expand_arrival_quota(rslot: torch.Tensor):
 
 
 def init_ta2a_groups(world: int, rpn: int = 8):
-    """建节点内与**跨节点**两组子通信域。EVERY rank must call this, in the same order.
+    """Create the intra-node and **inter-node** sub-communicators. EVERY rank must call this, in the same order.
 
-    跨节点子组(2026-08-24 新增):{l, l+rpn, l+2*rpn, ...},即同一 local index 跨所有节点。
-    这是标准 2D 分解里 Hop A 的通信域。
+    Inter-node subgroup (added 2026-08-24): {l, l+rpn, l+2*rpn, ...}, i.e. the same
+    local index across all nodes. This is Hop A's communication domain in the standard
+    2D decomposition.
 
-    **为什么必须建它**:此前 Hop A 直接用整个 EP 组(`inter_group=ep`,128 rank),
-    splits 是长度 128 的向量里塞 16 个非零、其余补零。后果是
-      · 照付 α(127)=0.704 —— 正是两跳本该省掉的那笔(子组只需 α(15)=0.485)
-      · 载荷摊到 128 个对端,每对端只剩 0.11 MB,落在 β(size) 曲线最底部
-    实测账差 **0.219 ms/次**,占 dispatch 缺口 1.799 的 12%,而且是**纯浪费不是权衡**。
+    **Why it must exist**: Hop A used to run over the whole EP group
+    (`inter_group=ep`, 128 ranks), with 16 non-zeros padded into a length-128 splits
+    vector. Consequences:
+      - pays the full α(127)=0.704 -- exactly the cost two-hop was supposed to remove
+        (the subgroup only needs α(15)=0.485)
+      - the payload is spread over 128 peers, 0.11 MB per peer, at the very bottom of
+        the β(size) curve
+    Measured ledger gap: **0.219 ms per call**, 12% of the 1.799 dispatch gap -- and it
+    is **pure waste, not a trade-off**.
 
-    **两组都在这里一次建完**:`new_group` 是全世界的集合操作,
-    在训练步中间懒建会挂死(2026-08 踩过,见 usercustomize 那条注释)。
+    **Both groups are built here, once**: `new_group` is a world-wide collective;
+    building it lazily mid-training-step deadlocks (stepped on in 2026-08, see the
+    usercustomize note).
     """
     groups = [dist.new_group(list(range(n * rpn, (n + 1) * rpn)))
               for n in range(world // rpn)]
     _INTRA_GROUP[0] = groups[dist.get_rank() // rpn]
-    # 顺序对所有 rank 一致:先按 local index 0..rpn-1 建,再各取自己那一个
+    # Order identical on every rank: build for local index 0..rpn-1 first, then each rank takes its own
     inter = [dist.new_group(list(range(l, world, rpn))) for l in range(rpn)]
     _INTER_GROUP[0] = inter[dist.get_rank() % rpn]
     return _INTRA_GROUP[0]
 
 
 def fixed_hist(idx: torch.Tensor, n_buckets: int) -> torch.Tensor:
-    """定长直方图 —— `torch.bincount(idx, minlength=n_buckets)` 的**逐位等价**替换。
+    """Fixed-length histogram -- a **bit-for-bit** replacement for `torch.bincount(idx, minlength=n_buckets)`.
 
-    为什么不用 bincount(2026-08-23 算子级表):bincount 的输出长度是
-    `max(minlength, idx.max()+1)`,**即使给了 minlength 也要先取一次 max**,
-    那是一次 device->host 同步,把整条流水抽干。判决床上实测 **0.784 ms/次**,
-    占到达链的 66.8% —— 一个 8 桶的直方图,比 [24576, 2048] 的大 gather 还贵 4.8 倍。
-    折每步 94 ms,比当时的全部剩余缺口(71 ms/步)还大。
+    Why not bincount (operator-level table, 2026-08-23): bincount's output length is
+    `max(minlength, idx.max()+1)`, so it takes a max first **even when minlength is
+    given** -- a device->host sync that drains the whole pipeline. Measured on the
+    verdict testbed: **0.784 ms per call**, 66.8% of the arrival chain -- an 8-bucket
+    histogram costing 4.8x more than the big [24576, 2048] gather. Per step that is
+    94 ms, larger than the entire remaining gap at the time (71 ms/step).
 
-    这里输出长度**编译期定死**为 n_buckets(调用点的 idx 按构造都在 [0, n_buckets)),
-    不需要看数据,因此没有同步。
+    Here the output length is **fixed at build time** to n_buckets (idx at every call
+    site is in [0, n_buckets) by construction); no data needs to be inspected, hence
+    no sync.
 
-    逐位相同:两者都是精确整数计数(tests/test_fixed_hist.py 覆盖 n=0/1/100/24576
-    与随机分布)。**且更安全**:越界索引在 bincount 下静默返回更长的数组,
-    在 scatter_add_ 下当场报错。
+    Bit-for-bit identical: both are exact integer counts (tests/test_fixed_hist.py
+    covers n=0/1/100/24576 and random distributions). **And safer**: an out-of-range
+    index silently returns a longer array under bincount, and fails on the spot under
+    scatter_add_.
     """
     out = torch.zeros(n_buckets, dtype=torch.int64, device=idx.device)
     if idx.numel() == 0:
@@ -316,7 +326,7 @@ def _stable_argsort_small(key: torch.Tensor, n_buckets: int) -> torch.Tensor:
 
     `torch.argsort(..., stable=True)` on an integer dtype is the most expensive primitive
     on this device: 5.32 ms for 65536 int64 values against 0.107 ms for float32
-    (内部基准脚本(未随仓发布)). Both of the return path's sorts have keys with a
+    (internal benchmark script, not shipped with the repo). Both of the return path's sorts have keys with a
     tiny range -- destination local rank (rpn = 8 values) and local expert index
     (epr = 2) -- so a composite key `bucket * n + position` is already a total order, which
     makes the sort stable without asking for stability, and it fits in float32 exactly as
@@ -388,7 +398,8 @@ def build_expansion(expert_idx, inverse, n_rows: int, world: int, n_experts: int
         # scatter at all.
         #
         # Why it matters: `scatter_add_` on int64 is the single most expensive primitive in
-        # the whole dispatch, 0.920 ms at n=65536 (内部基准脚本(未随仓发布)), while
+        # the whole dispatch, 0.920 ms at n=65536 (internal benchmark script, not
+        # shipped with the repo), while
         # a float32 sort of the same data is 0.107 ms and the reduction is 0.013 ms. The
         # routing property the paper is about is exactly what buys the cheaper formulation.
         #
@@ -487,7 +498,7 @@ def ta2a_moe_forward(x_local, expert_idx, gates, w13_shard, w2_shard,
         gate_rows = payload.new_zeros(n_rows, slots)
         gate_rows[inverse, slot_flat] = gates.reshape(-1)
     # Three places the gate COULD be applied; two are correct and one of the correct
-    # ones is free (Step 2, 内部设计记录(未随仓发布), landed 2026-08-20):
+    # ones is free (Step 2, internal design record (not shipped with the repo), landed 2026-08-20):
     #   - at the ORIGIN: WRONG. A returned row is the sum over every expert of that node
     #     that wanted the token -- granularity has already collapsed to per-(token, node)
     #     by then, so weighting once per (token, expert) slot at the origin would both
@@ -528,7 +539,7 @@ def ta2a_moe_forward(x_local, expert_idx, gates, w13_shard, w2_shard,
     # `node_rx` and the since-removed `my_gate` exchange (Step 2, 2026-08-20, keeps the
     # gate local instead -- subtraction, not fusion). The backward is where T-A2A
     # loses (6 differentiable exchanges to the baseline's 2, 5 after Step 2; 36% slower at equal volume,
-    # 内部实测), and each exchange costs ~0.1 ms of device-side
+    # internal measurement records), and each exchange costs ~0.1 ms of device-side
     # fixed overhead regardless of size (M0 Sec.6, A-9), so removing two round trips looked
     # free -- the gate is a few columns next to a 2048-wide hidden.
     #
@@ -560,9 +571,9 @@ def ta2a_moe_forward(x_local, expert_idx, gates, w13_shard, w2_shard,
     # redundant intra-node traffic was ONE cause of the kernel being slower than baseline --
     # but a minor one: removing it moved world=16 from 0.40x only to 0.465x (git 13f5954,
     # 2026-07-26; world=16 is 2 nodes, an admittedly poor operating point). The dominant
-    # cost was the PLAN: 内部实测 measured the fabric hop
+    # cost was the PLAN: internal measurement records had the fabric hop
     # already at 1.67x with plan = 2.593 ms, and the real culprit turned out to be
-    # argsort(stable) at 2.483 ms (内部实测).
+    # argsort(stable) at 2.483 ms (internal measurement records).
     # Instead route each row only to the ranks that want it -- one intra-node all_to_all
     # sized by the ACTUAL demand, so intra-node traffic is ~1x instead of rpn x.
     if _INTRA_GROUP[0] is None:
@@ -600,7 +611,7 @@ def ta2a_moe_forward(x_local, expert_idx, gates, w13_shard, w2_shard,
         r_idx, slot_idx = r_idx[ordo], slot_idx[ordo]
         # bincount is permutation-blind: counting the unpermuted owners equals
         # counting owner[ordo], so the third [pairs]-sized gather bought nothing.
-        i_send = fixed_hist(owner, rpn)                                # rows per peer(定长,无同步)
+        i_send = fixed_hist(owner, rpn)                                # rows per peer (fixed length, no sync)
         exp_rx = rx[r_idx]
         # The per-pair gate is NOT exchanged (Step 2): it stays on this rank and is
         # applied to `ret` when the expert results land back here. Indexing AFTER the

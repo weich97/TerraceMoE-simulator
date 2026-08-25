@@ -4,17 +4,17 @@ Drop-in alternative to `ep_dist.ep_moe_forward` that must produce the SAME route
 output (see tests/test_ta2a.py) while moving fewer, larger messages over the
 contended HCCS fabric.
 
-Why the levers are free -- and why a kernel is required (内部实测):
+Why the levers are free -- and why a kernel is required (internal measurement records):
 The baseline already builds its send buffer with an indexed gather sorted by
 destination rank (`ep_dist.py`: `payload = x_local[src[perm]]`). T-A2A changes only
 WHAT that permutation is, so both levers cost nothing extra:
 
   1. dedup      A token whose top-k experts include several experts on the SAME
                 destination node is sent to that node ONCE, not once per expert; the
-                node fans it out locally. Measured on real 参考工作点 traces
-                (内部实测) T-Route's fan-out is exactly
-                M groups, so this is a hard k/M byte reduction -- 2.00x at 参考工作点
-                (k=8, M=4), 3x at the flagship (k=6, M=2).
+                node fans it out locally. Measured on real reference-operating-point
+                traces (internal measurement records) T-Route's fan-out is exactly
+                M groups, so this is a hard k/M byte reduction -- 2.00x at the
+                reference operating point (k=8, M=4), 3x at the flagship (k=6, M=2).
   2. aggregation Rows are ordered by destination NODE, and each rank sends a node's
                 whole payload to ONE designated peer on that node instead of to all
                 `rpn` of its ranks. Same bytes cross the fabric, in `rpn`x larger
@@ -22,13 +22,13 @@ WHAT that permutation is, so both levers cost nothing extra:
                 is steep at the dispatch operating point (world=128: 41.4 GB/s at 25 MB vs
                 ~102 GB/s at 200 MB, lever 2.46x -- but world=128 was NOT directly
                 measured: beta(25) is the 2026-07-22 error-bar run, beta(200) is
-                extrapolated along the saturated curve; see
-                内部实测
-                measured beds: w64 57.2 -> 102.0, w32 65.0-68.4 -> 101.7-102.9).
+                extrapolated along the saturated curve; see the internal measurement
+                records for the measured testbeds: w64 57.2 -> 102.0,
+                w32 65.0-68.4 -> 101.7-102.9).
 
 A composition of stock collectives cannot do this: it has to physically move the whole
 payload two extra times to re-lay-out the send buffers, which measured 0.58x at the
-operating point (内部实测). Here the only extra motion is
+operating point (internal measurement records). Here the only extra motion is
 one intra-node forward of the RECEIVED slice (1/n_nodes of the traffic) over the fast
 tier.
 """
@@ -82,9 +82,9 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
     routings whose fan-out or quota is data-dependent; the count is then read back from
     the device, which costs a sync.
 
-    The sync is worth 0.12-0.18 ms at the 参考工作点 operating point -- real, but not the reason
+    The sync is worth 0.12-0.18 ms at the reference operating point -- real, but not the reason
     the plan was ever slow. That was `torch.argsort(stable=True)`, since replaced; see the
-    compaction comment below and 内部实测. Under `groups_m`
+    compaction comment below and the internal measurement records. Under `groups_m`
     the compaction is now sort-free entirely: the known row count lets one searchsorted
     over the cumsum replace the argsort, bit-for-bit.
 
@@ -116,7 +116,7 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
     dest_node = torch.div(expert_idx, epr * rpn, rounding_mode="floor")   # [T, k]
 
     # Dedup without torch.unique. Profiling the previous version on NPU
-    # (内部基准脚本(未随仓发布)) showed unique(+inverse) at 0.815 ms and the
+    # (internal benchmark script, not shipped with the repo) showed unique(+inverse) at 0.815 ms and the
     # arange+repeat_interleave that fed it at 0.601 ms -- together 55% of the 2.59 ms
     # plan, i.e. 3x what the whole fabric hop costs. Both are avoidable: a token's
     # (token, node) pairs are just the distinct entries of a [T, n_nodes] occupancy
@@ -129,7 +129,7 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
     # Node-major flatten => rows are already node-contiguous, no sort needed.
     node_first = occ.t().reshape(-1)                                   # [n_nodes * T]
     # float32 cumsum, not integer. Measured on this device at n=65536
-    # (内部基准脚本(未随仓发布)): cumsum int64 0.230 ms, int32 0.281 ms,
+    # (internal benchmark script, not shipped with the repo): cumsum int64 0.230 ms, int32 0.281 ms,
     # float32 0.101 ms -- integer scans have no fast path here, and an earlier "obvious"
     # int64 -> int32 change actually made this slower. float32 represents every integer up
     # to 2^24 exactly and the running count cannot exceed n_nodes*T (65536 at our largest
@@ -210,8 +210,9 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
     if groups_m is None:
         # General branch: sort on FLOAT keys. The stable argsort this construction
         # replaced was 2.483 ms of a 3.034 ms plan at T=4096 on 64 die -- 82% -- for
-        # 32768 uint8 elements, i.e. ~76 ns per element (内部基准脚本(未随仓发布),
-        # 内部实测): torch.argsort(stable=True) evidently
+        # 32768 uint8 elements, i.e. ~76 ns per element (internal benchmark script,
+        # not shipped with the repo; internal measurement records):
+        # torch.argsort(stable=True) evidently
         # has no fast path here. The primitive bench that condemned the integer sort
         # (5.32 ms at int64, 4.44 at int32) puts float32 sort at 0.107 ms -- 50x -- and
         # that also beat an interim scatter-based compaction (scatter_ int64, 0.487 ms).
@@ -237,7 +238,7 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
         # Launch/work accounting for the NPU tally (vs the general branch, N = n_nodes*T,
         # S = T*M): removes the where [N] and the argsort [N] (0.107 ms at N=65536 on the
         # prim bench), adds one searchsorted with S queries over N keys -- S*log2(N)
-        # ~ 8192*16 comparisons at the 参考工作点 point against the sort's N*log2(N) ~ 65536*16.
+        # ~ 8192*16 comparisons at the reference operating point against the sort's N*log2(N) ~ 65536*16.
         # Net one fewer kernel launch and O(N log N) -> O(S log N) work; everything else
         # in the plan is unchanged. float32 stays exact: all values are integers bounded
         # by n_nodes*T < 2^24, guarded at the top of this function.
@@ -250,11 +251,14 @@ def plan_ta2a(expert_idx: torch.Tensor, world: int, n_experts: int, rpn: int = 8
         sel = torch.searchsorted(row_count, _arange(n_rows, dev, torch.float32),
                                  right=True)
         if _dp.enabled():
-            # 漂移探针:把上面那条「两支路 sel 逐位相等」的契约在**设备上**执行一遍。
-            # 它至今只在 CPU 单测里证过(test_fastpath_sortfree_construction_is_
-            # bitwise_equal),而 NPU 的 searchsorted 质量是明写的未对账项(一次内部提交),
-            # 且它**只在快路径上跑** —— 快路径开/关正是「漂移的 run」与「不漂移的
-            # run」的分野之一。sel 变一位 = 行序变 = 下游每一处归约序变。
+            # Drift probe: execute the contract above ("sel is bit-for-bit equal
+            # across the two branches") ON THE DEVICE. So far it has only been proven
+            # in a CPU unit test (test_fastpath_sortfree_construction_is_
+            # bitwise_equal), the NPU's searchsorted quality is an explicitly listed
+            # un-reconciled item (an internal commit), and it runs **only on the fast
+            # path** -- fast path on/off is precisely one of the divides between
+            # "runs that drift" and "runs that do not". One bit of sel moved = row
+            # order moved = every downstream reduction order moved.
             _pos = _arange(n_nodes * T, dev, torch.float32)
             _dp.check_equal("plan.sel", sel, torch.argsort(
                 torch.where(node_first, _pos, _pos + float(n_nodes * T)))[:n_rows])

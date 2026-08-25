@@ -1,26 +1,42 @@
-"""K1(terrace_k1_arrival,到达侧融合链)的 CPU 侧位级契约与接入开关语义。
+"""CPU-side bit-level contract and integration-switch semantics for K1
+(terrace_k1_arrival, the arrival-side fused chain).
 
-kernel 本体跑在集群 NPU 上(位级验证:构建脚本 ascendc/build.sh 的头注 的 k1 冒烟命令 +
-内部基准脚本(未随仓发布));本文件把守的是**本地能证的全部**:
+The kernel itself runs on the cluster NPUs (bit-level validation: the k1 smoke
+command in the header comment of the build script ascendc/build.sh + an internal
+benchmark script, not shipped with the repo); this file guards **everything that
+can be proven locally**:
 
-  1. 可执行规格:terrace.ops.k1_arrival_ref(纯 torch,kernel 语义的逐位镜像)
-     对着现组合链**原文**(_expand_arrival_quota + owner 稳定桶排 + bincount +
-     两处 gather,逐行照抄)逐位对账 —— 多几何 x 多 dtype,含退化输入
-     (C1 zeros 收容行、R=0);反向(组合链伴随)同样逐位。
-  2. 降级路径:无 .so 时 k1_arrival 包装器走参考实现,结果与现链逐位不变;
-     TerraceK1ArrivalFn.backward 的公式(kernel 路径将来真正跑的反向)对着
-     autograd 的组合链反向逐位对账。
-  3. 开关语义:k1_arrival 列入 _REQUIRED_OPS(旧 .so 整体降级,不半注册);
-     "0" 显式关、"require" 无 .so 必炸 —— 与 passthrough 同一套契约。
-  4. 接线证明(gloo,world 4 / rpn 2):把 terrace.ops.k1_arrival 换成计数的
-     参考实现、强制打开闸门,融合前向与 legacy 3 参接缝的前向 + 全部梯度必须与
-     未接 K1 的现链逐位相等,且假 kernel 的调用计数 > 0(活路径证据 ——
-     等价断言对"闸门从未打开"是盲的,内部工程记录 的静默失效纪律)。
+  1. Executable spec: terrace.ops.k1_arrival_ref (pure torch, a bitwise mirror
+     of the kernel semantics) is reconciled bit-for-bit against the current
+     composite chain **verbatim** (_expand_arrival_quota + owner stable bucket
+     sort + bincount + two gathers, copied line by line) — multiple geometries x
+     multiple dtypes, incl. degenerate inputs (C1 zeros-containment rows, R=0);
+     the backward (adjoint of the composite chain) is bitwise as well.
+  2. Fallback path: with no .so, the k1_arrival wrapper takes the reference
+     implementation and the results match the current chain bit for bit; the
+     formula of TerraceK1ArrivalFn.backward (the backward the kernel path will
+     actually run) is reconciled bit-for-bit against the composite chain's
+     autograd.
+  3. Switch semantics: k1_arrival is listed in _REQUIRED_OPS (an old .so
+     degrades as a whole, no partial registration); "0" is an explicit off,
+     "require" must blow up when there is no .so — the same contract as
+     passthrough.
+  4. Wiring proof (gloo, world 4 / rpn 2): swap terrace.ops.k1_arrival for a
+     counting reference implementation, force the gate open; the fused forward
+     and the legacy 3-arg seam's forward + all gradients must be bitwise equal
+     to the current chain without K1, and the fake kernel's call count must be
+     > 0 (live-path evidence — equivalence assertions are blind to "the gate
+     never opened"; the silent-failure discipline of the internal engineering
+     records).
 
-为什么参考实现足以在 CPU 上代表 kernel:两者是同一个数学对象(稳定计数排序),
-两遍法(计数 -> 前缀游标 -> 展开写行)与稳定升序 argsort 的逐位一致性论证见
-terrace/ops/ascendc/op_kernel/terrace_k1_arrival.cpp 文件头;CPU 单测通不出设备
-行为(内部工程记录),所以 NPU 位级另有集群冒烟把守,本文件不冒充它。
+Why the reference implementation is enough to represent the kernel on CPU: the
+two are the same mathematical object (a stable counting sort); the
+bitwise-consistency argument between the two-pass method (count -> prefix
+cursors -> expanded row writes) and a stable ascending argsort is in the header
+of terrace/ops/ascendc/op_kernel/terrace_k1_arrival.cpp; CPU unit tests cannot
+exercise device behavior (internal engineering records), so the NPU bit level is
+guarded separately by cluster smoke runs — this file does not pretend to be
+them.
 """
 from __future__ import annotations
 
@@ -43,7 +59,8 @@ from terrace.ta2a_fwd import (_expand_arrival_quota,  # noqa: E402
 
 @pytest.fixture()
 def clean_ops(monkeypatch):
-    """每例独立判定(与 test_terrace_ops_scaffold 同款):清环境、清缓存。"""
+    """One independent verdict per case (same pattern as
+    test_terrace_ops_scaffold): clear env, clear caches."""
     monkeypatch.delenv("TERRACE_CUSTOM_OPS", raising=False)
     monkeypatch.delenv("TERRACE_OPS_LIB", raising=False)
     tops.reset()
@@ -52,8 +69,9 @@ def clean_ops(monkeypatch):
 
 
 def _chain(rx, rslot, rgate, quota, epr, rpn):
-    """现组合链原文(ta2a_fwd.ta2a_moe_forward / ta2a_dispatch.ta2a_permute 的
-    到达段 quota 分支,即接入点 else 分支的逐行照抄)—— K1 的功能规格。"""
+    """The current composite chain, verbatim (the arrival-segment quota branch of
+    ta2a_fwd.ta2a_moe_forward / ta2a_dispatch.ta2a_permute, i.e. a line-by-line
+    copy of the integration point's else branch) — K1's functional spec."""
     r_idx, slot_idx = _expand_arrival_quota(rslot)
     owner = slot_idx // epr
     ordo = _stable_argsort_small(owner, rpn)
@@ -63,8 +81,9 @@ def _chain(rx, rslot, rgate, quota, epr, rpn):
 
 
 def _mk(R, quota, epr, rpn, H, dtype, seed, degenerate=False):
-    """C1 线格式的到达面:每行升序不重复槽号(_pack_quota_wire 的构造),或
-    degenerate= True 时全零行(zeros 收容:掉队行 = 槽 0 / gate 0)。"""
+    """Arrival plane of the C1 wire format: each row holds ascending,
+    duplicate-free slot ids (the construction in _pack_quota_wire), or all-zero
+    rows when degenerate=True (zeros containment: straggler rows = slot 0 / gate 0)."""
     g = torch.Generator().manual_seed(seed)
     slots = epr * rpn
     assert quota <= slots
@@ -81,23 +100,25 @@ def _mk(R, quota, epr, rpn, H, dtype, seed, degenerate=False):
 
 NAMES = ("send_buf", "gate_pairs", "r_idx", "slot_idx", "i_send")
 
-# 几何覆盖:quota 1/2/3/4/5、epr 1..8、rpn 1..16、slots 跨 4..63、H 非 2 幂。
+# Geometry coverage: quota 1/2/3/4/5, epr 1..8, rpn 1..16, slots spanning 4..63,
+# H not a power of 2.
 GEOMS = [
     # (R, quota, epr, rpn, H)
-    (16, 2, 2, 8, 64),     # 对齐床几何(slots 16)
-    (64, 1, 2, 8, 32),     # quota=1:r_idx == ordo 的退化
-    (33, 3, 2, 4, 48),     # 非 2 幂 R/quota
+    (16, 2, 2, 8, 64),     # matches the testbed geometry (slots 16)
+    (64, 1, 2, 8, 32),     # quota=1: the r_idx == ordo degenerate case
+    (33, 3, 2, 4, 48),     # non-power-of-2 R/quota
     (128, 4, 4, 8, 16),    # slots 32
     (7, 2, 8, 4, 96),      # epr>rpn
-    (1, 1, 1, 1, 24),      # 最小几何
+    (1, 1, 1, 1, 24),      # minimal geometry
     (256, 2, 2, 16, 8),    # rpn 16
-    (40, 5, 3, 4, 40),     # quota 不整除 slots 的奇数几何(slots 12)
-    (48, 7, 9, 7, 8),      # slots 63:现链 int64 掩码上界几何
+    (40, 5, 3, 4, 40),     # odd geometry where quota does not divide slots (slots 12)
+    (48, 7, 9, 7, 8),      # slots 63: the current chain's int64 mask upper-bound geometry
 ]
 
 
 # ======================================================================================
-# 1. 可执行规格:参考实现 == 现链原文,逐位(多几何 x 多 dtype >= 8 例)
+# 1. Executable spec: reference impl == current chain verbatim, bitwise
+#    (multi-geometry x multi-dtype >= 8 cases)
 # ======================================================================================
 
 @pytest.mark.parametrize("geom", GEOMS, ids=lambda g: f"R{g[0]}q{g[1]}e{g[2]}r{g[3]}")
@@ -110,11 +131,12 @@ def test_ref_bitwise_equals_chain(geom, dtype):
         got = tops.k1_arrival_ref(rx, rslot, rgate, quota, epr, rpn)
         for name, w, g in zip(NAMES, want, got):
             assert w.dtype == g.dtype and w.shape == g.shape, name
-            assert torch.equal(w, g), f"{name} 与现链不逐位相等 (seed {seed})"
+            assert torch.equal(w, g), f"{name} not bitwise equal to the current chain (seed {seed})"
 
 
 def test_ref_bitwise_on_degenerate_rows():
-    """C1 zeros 收容:全零槽行(slot 0 x quota)是线上合法输入,照样逐位。"""
+    """C1 zeros containment: all-zero slot rows (slot 0 x quota) are legal wire
+    input; still bitwise."""
     R, quota, epr, rpn, H = 24, 2, 2, 8, 32
     rx, rslot, rgate = _mk(R, quota, epr, rpn, H, torch.float32, 5, degenerate=True)
     for name, w, g in zip(NAMES, _chain(rx, rslot, rgate, quota, epr, rpn),
@@ -123,7 +145,8 @@ def test_ref_bitwise_on_degenerate_rows():
 
 
 def test_ref_bitwise_on_empty_arrival():
-    """R=0(某 rank 一行未收到):五个输出空/零,与现链同形同值。"""
+    """R=0 (a rank that received no rows): all five outputs empty/zero, same
+    shape and value as the current chain."""
     quota, epr, rpn, H = 2, 2, 8, 16
     rx = torch.zeros(0, H)
     rslot = torch.zeros(0, quota, dtype=torch.int64)
@@ -136,7 +159,8 @@ def test_ref_bitwise_on_empty_arrival():
 
 
 def test_ref_backward_bitwise_equals_chain_autograd():
-    """参考实现的反向(gather 伴随)与现链 autograd 逐位相等。"""
+    """The reference implementation's backward (gather adjoint) is bitwise equal
+    to the current chain's autograd."""
     R, quota, epr, rpn, H = 12, 2, 2, 4, 8
     rx0, rslot, rgate0 = _mk(R, quota, epr, rpn, H, torch.float32, 9)
     g = torch.Generator().manual_seed(1)
@@ -154,23 +178,26 @@ def test_ref_backward_bitwise_equals_chain_autograd():
 
 
 # ======================================================================================
-# 2. 降级路径:无 .so 时包装器 == 现链;kernel 路径的 backward 公式逐位
+# 2. Fallback path: with no .so the wrapper == current chain; the kernel path's
+#    backward formula bitwise
 # ======================================================================================
 
 def test_wrapper_falls_back_bitwise_without_so(clean_ops):
-    assert tops.custom_ops_enabled() is False, "本地无 CANN 前提失效?"
+    assert tops.custom_ops_enabled() is False, "local no-CANN premise broken?"
     R, quota, epr, rpn, H = 16, 2, 2, 8, 64
     rx, rslot, rgate = _mk(R, quota, epr, rpn, H, torch.bfloat16, 3)
     want = _chain(rx, rslot, rgate, quota, epr, rpn)
     got = tops.k1_arrival(rx, rslot, rgate, quota, epr, rpn, my_local=1)
     for name, w, g in zip(NAMES, want, got):
-        assert torch.equal(w, g), f"降级路径 {name} 与现链不逐位相等"
+        assert torch.equal(w, g), f"fallback path {name} not bitwise equal to the current chain"
 
 
 def test_fn_backward_formula_bitwise_equals_chain_autograd():
-    """TerraceK1ArrivalFn.backward 的公式(kernel 路径在集群上真正跑的反向,
-    ordo 重算 + 两处 index_add)对着现链 autograd 逐位对账 —— 不需要 .so:
-    公式是纯组合链,拿一个手搓 ctx 直接调静态方法。"""
+    """The formula of TerraceK1ArrivalFn.backward (the backward the kernel path
+    really runs on the cluster: ordo recompute + two index_add) reconciled
+    bit-for-bit against the current chain's autograd — no .so needed: the
+    formula is a pure composite chain, so call the static method directly with a
+    hand-built ctx."""
     R, quota, epr, rpn, H = 20, 3, 2, 4, 16
     rx0, rslot, rgate0 = _mk(R, quota, epr, rpn, H, torch.float32, 21)
     g = torch.Generator().manual_seed(2)
@@ -192,11 +219,13 @@ def test_fn_backward_formula_bitwise_equals_chain_autograd():
 
 
 # ======================================================================================
-# 3. 开关语义(k1 特有件;通用契约归 test_terrace_ops_scaffold)
+# 3. Switch semantics (k1-specific parts; the generic contract belongs to
+#    test_terrace_ops_scaffold)
 # ======================================================================================
 
 def test_k1_is_in_required_ops():
-    """旧的仅含 passthrough 的 .so 必须整体降级 —— 半新半旧的算子集比慢更糟。"""
+    """An old .so containing only passthrough must degrade as a whole — a
+    half-new, half-old op set is worse than slow."""
     assert "k1_arrival" in tops._REQUIRED_OPS
 
 
@@ -218,7 +247,8 @@ def test_switch_require_fails_hard_on_k1_call(clean_ops):
 
 
 # ======================================================================================
-# 4. 接线证明(gloo 分布层):强制 kernel 路径 == 现链,且假 kernel 确实被调用
+# 4. Wiring proof (gloo distributed layer): forced kernel path == current chain,
+#    and the fake kernel really gets called
 # ======================================================================================
 
 WORLD, RPN, T, K, M, E, H, D = 4, 2, 8, 4, 2, 8, 6, 4
@@ -235,7 +265,7 @@ def _routing(gen, n_nodes, per, quota):
 
 def _run(rank, world, q):
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    # 已占用:29577/29591/29613/29623/29627/29641/29645/29661/29665。
+    # Ports in use: 29577/29591/29613/29623/29627/29641/29645/29661/29665.
     os.environ.setdefault("MASTER_PORT", "29677")
     dist.init_process_group("gloo", rank=rank, world_size=world)
     try:
@@ -252,8 +282,10 @@ def _run(rank, world, q):
         real_enabled, real_k1 = ops_mod.custom_ops_enabled, ops_mod.k1_arrival
 
         def fake_k1(rx, rslot, rgate, quota_, epr_, rpn_, my_local=0):
-            # 接线断言:接入点交给 kernel 的几何必须自洽(参数错位在等价断言
-            # 里可能显现为对的 —— 比如 epr/rpn 同值几何 —— 这里直接钉死)。
+            # Wiring assertions: the geometry the integration point hands the
+            # kernel must be self-consistent (a swapped argument can still look
+            # right in the equivalence assertions — e.g. a geometry where epr
+            # and rpn coincide — so pin it down right here).
             assert rx.dim() == 2 and rslot.shape == rgate.shape
             assert rslot.shape[1] == quota_ == quota
             assert epr_ == epr and rpn_ == RPN
@@ -280,7 +312,7 @@ def _run(rank, world, q):
                 probs_dense = torch.zeros(T, E)
                 probs_dense[torch.arange(T).unsqueeze(1), idx] = gates0
 
-                # 入口 1:融合前向(ta2a_fwd 的接入点)
+                # Entry 1: fused forward (the integration point in ta2a_fwd)
                 xF = x0.clone().requires_grad_(True)
                 gF = gates0.clone().requires_grad_(True)
                 w13F = w13_0.clone().requires_grad_(True)
@@ -289,7 +321,7 @@ def _run(rank, world, q):
                                       groups_m=M)
                 yF.backward(G)
 
-                # 入口 2:legacy 3 参接缝(ta2a_dispatch 的接入点)
+                # Entry 2: legacy 3-arg seam (the integration point in ta2a_dispatch)
                 hidL = x0.clone().requires_grad_(True)
                 probL = probs_dense.clone().requires_grad_(True)
                 w13L = w13_0.clone().requires_grad_(True)
@@ -312,7 +344,7 @@ def _run(rank, world, q):
                 ops_mod.k1_arrival = real_k1
 
         base = one_pass(forced=False)
-        calls_baseline = calls[0]           # 必须仍为 0:未强制时假 kernel 不可达
+        calls_baseline = calls[0]           # must still be 0: fake kernel unreachable unless forced
         forced = one_pass(forced=True)
         diffs = {}
         for name in base:
@@ -344,27 +376,35 @@ def k1_wiring():
 
 @pytest.mark.timeout(300)
 def test_k1_forced_path_bitwise_equals_chain(k1_wiring):
-    """强制 kernel 路径(假 kernel = 参考实现)后,两个接入点的前向与全部梯度
-    必须与现链逐位相等 —— 接入点的参数接线、张量交接、autograd 缝合全对。"""
+    """With the kernel path forced (fake kernel = reference implementation), both
+    integration points' forward and all gradients must be bitwise equal to the
+    current chain — argument wiring, tensor hand-off, and autograd stitching at
+    the integration points are all correct."""
     for r in k1_wiring:
         for name, d in r["diffs"].items():
-            assert d is None, f"rank {r['rank']}: {name} 强制 K1 路径与现链不逐位相等 ({d})"
+            assert d is None, (
+                f"rank {r['rank']}: {name} forced K1 path not bitwise equal to "
+                f"the current chain ({d})")
 
 
 @pytest.mark.timeout(300)
 def test_k1_forced_path_is_live(k1_wiring):
-    """活路径证据:融合前向 + legacy 接缝各过一次接入点,假 kernel 恰被调 2 次;
-    未强制的基线趟必须 0 次(闸门默认关死)。等价断言对『闸门从未打开』是盲的,
-    这条不通过,上面那条什么都没证明(内部工程记录)。"""
+    """Live-path evidence: the fused forward + the legacy seam each cross the
+    integration point once, so the fake kernel is called exactly 2 times; the
+    unforced baseline pass must be 0 (the gate defaults to hard-off).
+    Equivalence assertions are blind to "the gate never opened"; if this test
+    fails, the one above proved nothing (internal engineering records)."""
     for r in k1_wiring:
-        assert r["calls_baseline"] == 0, f"rank {r['rank']}: 基线趟闸门竟然开着"
+        assert r["calls_baseline"] == 0, f"rank {r['rank']}: gate open on the baseline pass"
         assert r["calls"] == 2, (
-            f"rank {r['rank']}: 假 kernel 被调 {r['calls']} 次,预期 2"
-            f"(融合前向 1 + legacy 接缝 1)—— 接入点没走 kernel 分支")
+            f"rank {r['rank']}: fake kernel called {r['calls']} times, expected 2 "
+            f"(fused forward 1 + legacy seam 1) — the integration points did not "
+            f"take the kernel branch")
 
 
 # ======================================================================================
-# 工程纪律:本文件自身 LF + py_compile(ops 目录文件归 test_terrace_ops_scaffold 锁)
+# Engineering discipline: this file itself LF + py_compile (files under ops/ are
+# locked by test_terrace_ops_scaffold)
 # ======================================================================================
 
 def test_this_file_compiles_and_is_lf():
@@ -375,68 +415,85 @@ def test_this_file_compiles_and_is_lf():
 
 
 def test_gm_ub_gm_kernels_declare_both_vecin_and_vecout():
-    """做 GM→UB→GM 的 kernel **必须同时有 VECIN 和 VECOUT 队列**。
+    """Kernels doing GM→UB→GM **must declare both a VECIN and a VECOUT queue**.
 
-    2026-08-24 实测出来的坑(先在 passthrough 上,再在 K1 上照同一形状发现):
-    AscendC 里 `TQue` 的**位置**决定它同步哪两条流水 ——
-        VECIN  的 EnQue/DeQue 配 MTE2 -> V
-        VECOUT 的 EnQue/DeQue 配 V    -> MTE3
-    只声明 VECIN、然后直接从 VECIN 的 LocalTensor 发 MTE3(DataCopy 到 GM),
-    那道 MTE2→MTE3 的屏障**没有人插**:搬出去的可能是还没搬完的内容,
-    也可能已被下一轮 AllocTensor 复用覆盖。
+    A pitfall measured on 2026-08-24 (first on passthrough, then found in K1 in
+    the exact same shape): in AscendC, a `TQue`'s **position** decides which two
+    pipelines it synchronizes —
+        VECIN 's EnQue/DeQue pairs MTE2 -> V
+        VECOUT's EnQue/DeQue pairs V    -> MTE3
+    Declare only VECIN and then issue MTE3 (DataCopy to GM) straight from the
+    VECIN LocalTensor, and **nobody inserts** that MTE2→MTE3 barrier: what gets
+    copied out may not have finished arriving, or may already have been
+    overwritten by the next round's AllocTensor reuse.
 
-    症状是**静默的数据错**,不是编译错也不是崩溃 —— passthrough 上表现为
-    「输出大部分是零」(8x256 错 2047/2048),而算子 build/load/execute 全绿。
-    K1 的 CopyRow 当时逐字照抄了 passthrough 的错误样板,注释还写着「同款」。
-    **护栏定在源码层,因为这一类错编译器不报、加载不报、只有逐位比对才现形。**
+    The symptom is a **silent data error**, not a compile error and not a
+    crash — on passthrough it showed up as "output mostly zeros" (8x256 with
+    2047/2048 wrong), while op build/load/execute stayed all green. K1's CopyRow
+    at the time copied passthrough's broken template word for word, with a
+    comment that even said "same as passthrough".
+    **The guardrail sits at the source level because the compiler does not
+    report this class of error, loading does not report it, and only bitwise
+    comparison exposes it.**
     """
     import glob
     import re
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     kdir = os.path.join(root, "terrace/ops/ascendc/op_kernel")
     if not os.path.isdir(kdir):
-        pytest.skip("kernel 目录不在")
+        pytest.skip("kernel directory absent")
     checked = 0
     for path in sorted(glob.glob(os.path.join(kdir, "*.cpp"))):
         src = open(path, encoding="utf-8").read()
-        # 只管"把 UB 里的东西 DataCopy 回 GM"的 kernel;纯读入/纯标量写的不管
+        # Only kernels that DataCopy from UB back to GM are in scope; pure
+        # readers and scalar-only writers are not
         writes_gm = re.search(r"DataCopy\(\s*\w*[Gg]m", src) is not None
         if not writes_gm:
             continue
         checked += 1
         name = os.path.basename(path)
-        assert "QuePosition::VECIN" in src, "%s 写 GM 却没有 VECIN 队列" % name
+        assert "QuePosition::VECIN" in src, "%s writes GM but has no VECIN queue" % name
         assert "QuePosition::VECOUT" in src, (
-            "%s 有 GM→UB→GM 的搬运却**没有 VECOUT 队列** —— "
-            "MTE2/MTE3 之间的屏障是队列框架按位置配对插的,少了 VECOUT 就没人插,"
-            "写出去的是脏数据。这是 2026-08-24 在 passthrough 上实测到的静默错。" % name)
-    assert checked >= 2, "只扫到 %d 个写 GM 的 kernel,护栏可能没扫到东西" % checked
+            "%s does a GM→UB→GM transfer but has **no VECOUT queue** — the "
+            "MTE2/MTE3 barrier is inserted by the queue framework pairing on "
+            "position; without VECOUT nobody inserts it and dirty data goes out. "
+            "This is the silent error measured on passthrough on 2026-08-24." % name)
+    assert checked >= 2, (
+        "only %d GM-writing kernels scanned; the guardrail may not be scanning "
+        "anything" % checked)
 
 
 def test_custom_ops_default_is_off_not_on():
-    """**未设 TERRACE_CUSTOM_OPS 时算子必须是关的。**
+    """**With TERRACE_CUSTOM_OPS unset, the custom ops must be off.**
 
-    2026-08-24 的事故:默认是 "1",于是 `.so` 第一次编译成功那一刻
-    (07:25,k1-rebuild),未过逐位校验的 K1 kernel 自动进入训练 dispatch 路径。
-    此后每一发 T-A2A on 臂在第 0 步全 128 rank 同时炸:
+    The 2026-08-24 incident: the default was "1", so the moment the `.so` first
+    compiled successfully (07:25, k1-rebuild), the K1 kernel — which had not
+    passed bitwise validation — automatically entered the training dispatch
+    path. Every T-A2A on-arm run after that blew up at step 0 on all 128 ranks
+    at once:
         RuntimeError: Split sizes dosen't match total dim 0 size
-    (K1 的 slot_idx 索引算错 -> i_send 错 -> Hop B 的 splits 对不上)
-    r4 与 isub 两发判决床白烧,而 runner 还报"收工"、写了 DONE 旗。
+    (K1's slot_idx indexing wrong -> i_send wrong -> Hop B splits mismatch)
+    Two verdict-testbed runs (r4 and isub) burned for nothing, while the runner
+    still reported "done" and wrote the DONE flag.
 
-    bitcheck 的判决行一直写着「K1 不得上床」,但**没有任何机制执行它** ——
-    唯一的闸是「.so 能不能 dlopen」。编译成功 ≠ 算对了。
+    bitcheck's verdict line had said "K1 must not go on the testbed" all along,
+    but **no mechanism enforced it** — the only gate was "does the .so dlopen".
+    A successful compile ≠ correct arithmetic.
 
-    这条护栏钉住的就是那个默认值:**没人签字,kernel 不上路径。**
+    What this guardrail pins is that default: **no sign-off, no kernel on the
+    path.**
     """
     import importlib
     saved = os.environ.pop("TERRACE_CUSTOM_OPS", None)
     try:
         importlib.reload(tops)
         assert tops._normalized_switch() == "0", (
-            "TERRACE_CUSTOM_OPS 未设时归一化成了 %r —— 必须是 '0'。"
-            "默认开 = 任何一次成功编译都会把未验证的 kernel 送进训练路径。"
+            "TERRACE_CUSTOM_OPS unset normalized to %r — must be '0'. "
+            "Default-on means any single successful compile ships an unvalidated "
+            "kernel into the training path."
             % tops._normalized_switch())
-        # 反向对照:显式索取时必须真的开,否则这条护栏就把功能锁死了
+        # Reverse control: an explicit request must really turn it on, otherwise
+        # this guardrail locks the feature out for good
         os.environ["TERRACE_CUSTOM_OPS"] = "1"
         assert tops._normalized_switch() == "1"
         os.environ["TERRACE_CUSTOM_OPS"] = "require"

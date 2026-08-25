@@ -1,128 +1,150 @@
-# 仿真器:一台机器的实测,许多台集群的答案
+# The simulator: measured on one machine, answers for many clusters
 
-`sim/` 是一个**用实测标定**的 MoE-EP 通信仿真器:给出集群规格(快/慢两级的
-α、β、组内卡数)与 MoE 几何(E/N_g/k/M/H/序列/micro-batch),它预测一跳与
-两跳 all-to-all 的通信耗时,并在验证门通过的前提下,把比较外推到你没有的集群上。
+`sim/` is a **measurement-calibrated** MoE-EP communication simulator: given a cluster spec
+(α, β, and group size for the fast/slow tiers) and a MoE geometry (E/N_g/k/M/H/sequence/
+micro-batch), it predicts one-hop and two-hop all-to-all communication time, and — only where
+the validation gates pass — extrapolates the comparison to clusters you do not have.
 
-## 方法论(这是主要交付物,代码只是它的载体)
+## Methodology (this is the main deliverable; the code is just its carrier)
 
 ```
-测量  ->  标定  ->  验证  ->  外推
+measure  ->  calibrate  ->  validate  ->  extrapolate
 ```
 
-1. **测量**:微基准只测原语——α(world) 曲线、β(对齐口径)、每次调用的固定成本
-   (splits 主机同步、到达链)。
-2. **标定**:仿真器的每个参数指向一次实测,并标注口径(`sim/calibrate.py`);
-   本仓发布蒸馏后的常数,不发布原始扫描。
-3. **验证(多数仿真工作缺的一环)**:仿真器必须先复现**同一台机器上的独立测量**,
-   才有资格外推。两层门,阈值先于目标写死:
-   - **Tier-1(通信微观)**:对同机直测的一跳/两跳耗时,相对误差中位 ≤20%、
-     最大 ≤35%、交叉点位置复现。**当前:通过**(8.1% / 12.5% / 2048–4096)。
-   - **Tier-2(端到端步级)**:对 7 个训练几何的实测 G(1 个标定、6 个保留;n4 为预注册后加入的规模轴点)。
-     **当前:不通过 —— 步级外推封禁。** 原因指名:相位级计时之和与步级差
-     相差 ~5×(两臂在双流上的重叠不同,事件计时的相位跨度加不出步时)。
-     这是已知开放问题,不是调参能解决的;测试里钉着
-     `test_tier2_step_gate_currently_fails_documented` —— **这门哪天突然绿了,
-     必须人工核查是真解决了还是门被改松了**。
-4. **外推**:只有过门的层级允许外推,产出一律标注「仿真」。
+1. **Measure**: microbenchmarks measure primitives only — the α(world) curve, β (aligned-payload
+   convention), and per-call fixed costs (splits host sync, arrival chain).
+2. **Calibrate**: every simulator parameter points to one measurement, with its convention noted
+   (`sim/calibrate.py`); this repo publishes the distilled constants, not the raw sweeps.
+3. **Validate (the step most simulation work skips)**: the simulator must first reproduce
+   **independent measurements on the same machine** before it earns the right to extrapolate.
+   Two gate tiers, thresholds fixed ahead of the targets:
+   - **Tier-1 (communication micro level)**: against directly measured one-hop/two-hop times on
+     the same machine — median relative error ≤20%, max ≤35%, crossover position reproduced.
+     **Current: pass** (8.1% / 12.5% / 2048–4096).
+   - **Tier-2 (end-to-end step level)**: against measured G on 7 training geometries
+     (1 calibration, 6 holdout; n4 is a scale-axis point added after preregistration).
+     **Current: fail — step-level extrapolation stays locked.** The cause, named: the sum of
+     phase-level timings differs from the step-level delta by ~5× (the two arms overlap
+     differently across the dual streams; event-timed phase spans do not add up to step time).
+     This is a known open problem, not something parameter tuning can fix; the test suite pins
+     `test_tier2_step_gate_currently_fails_documented` — **the day this gate suddenly turns
+     green, a human must check whether the problem was actually solved or the gate was loosened**.
+4. **Extrapolate**: only tiers that passed their gate may extrapolate, and every output is
+   labeled "simulated".
 
-## 标定要点(细节见 `sim/calibrate.py` 注释)
+## Calibration highlights (details in the `sim/calibrate.py` comments)
 
-- **β_fast 有物理背书**:节点内 8 卡 a2a 实测 122.6 GB/s,与聚合出口的物理值
-  (6×节点内链路 112.1 + 1×封装内直连 185)/7 = 122.4 差 0.2%,且该档发间散布
-  <0.3%——全部数据里最稳的一条。
-- **α 是机器性质,不可跨机假设**:本机直测 α(16)+α(8) ≈ α(128)
-  (两跳在 α 上几乎不省);另一台机器的曲线暗示省 2.85×。跨机只可借形状、
-  必须本机重标,并报告敏感性。
-- **机台发间漂移 ~20%**:验证目标取多发合并中位;任何单发数字都不足以当门。
+- **β_fast has physical backing**: intra-node 8-die a2a measures 122.6 GB/s, within 0.2% of the
+  aggregate-egress physical value (6 × intra-node link 112.1 + 1 × in-package direct 185)/7
+  = 122.4, and run-to-run spread at this tier is <0.3% — the most stable number in the entire
+  dataset.
+- **α is a machine property; never assume it across machines**: on this machine, directly
+  measured α(16)+α(8) ≈ α(128) (two-hop saves almost nothing on α); another machine's curve
+  implies a 2.85× saving. Across machines you may borrow only the shape — re-calibrate locally,
+  and report sensitivity.
+- **Machine run-to-run drift is ~20%**: validation targets use the pooled median across runs;
+  no single-run number is good enough to serve as a gate.
 
-## 第一张外推图(通信级,Tier-1 解锁;全部为**仿真**,非实测)
+## The first extrapolation figure (communication level, Tier-1 unlocked; all numbers are **simulated**, not measured)
 
-一跳耗时 / 两跳耗时(>1 = 两跳快),16 组 × R=8,k=6,T=4096 token/rank:
+One-hop time / two-hop time (>1 = two-hop faster), 16 groups × R=8, k=6, T=4096 tokens/rank:
 
-| 实现档 \ 层级比 | 1.03(扁平) | 3.2 | 8 | 15.7 |
+| Implementation tier \ hierarchy ratio | 1.03 (flat) | 3.2 | 8 | 15.7 |
 |---|---|---|---|---|
-| PyTorch 到达链(实测 0.0875 µs/行) | 0.39 | 0.83 | 1.47 | 2.02 |
-| 融合 kernel(估 0.012) | 0.79 | 1.47 | 2.18 | 2.63 |
-| 零实现开销(上界) | 0.94 | 1.68 | 2.36 | 2.77 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | 0.39 | 0.83 | 1.47 | 2.02 |
+| Fused kernel (est. 0.012) | 0.79 | 1.47 | 2.18 | 2.63 |
+| Zero implementation overhead (upper bound) | 0.94 | 1.68 | 2.36 | 2.77 |
 
-(q=3;q=2/q=6 与全部六档层级比,跑 `python -m sim.sweep` 现算——表随标定走,文档只存快照。)
+(q=3; for q=2/q=6 and all six hierarchy-ratio tiers, run `python -m sim.sweep` to compute them
+live — the table tracks the calibration; the doc stores only a snapshot.)
 
-三条一致性锚:
+Three consistency anchors:
 
-- 扁平列 ≤1 —— 复现我们在扁平超节点上的实测判负(内部一致);
-- 层级比 ≥3.2 的列 >1 —— 与公开工作(DeepSeek-V3 node-limited、TeleChat3-MoE
-  +15%、Pangu Ultra MoE)的方向一致(外部一致);
-- 实现档的影响与层级比同量级 —— **「先修实现,再谈拓扑」在层级机上同样成立**。
+- The flat column is ≤1 — reproducing our measured negative verdict on the flat supernode
+  (internal consistency);
+- Columns at hierarchy ratio ≥3.2 are >1 — directionally consistent with public work
+  (DeepSeek-V3 node-limited, TeleChat3-MoE +15%, Pangu Ultra MoE) (external consistency);
+- The implementation tier's impact is on the same order as the hierarchy ratio's —
+  **"fix the implementation first, then talk topology" holds on hierarchical machines too**.
 
-## 三张新图:值不值得两跳,一眼看完(全部为**仿真**,Tier-1 口径)
+## Three new figures: is two-hop worth it, at a glance (all **simulated**, Tier-1 scope)
 
-### breakeven 地图:你的集群落在哪个区?
+### The breakeven map: which region does your cluster land in?
 
-![breakeven 地图](assets/f8-breakeven-map.svg)
+![breakeven map](assets/f8-breakeven-map.svg)
 
-绿区 = 两跳赢。**breakeven 层级比**(两跳开始赢的最小层级比,q=3,T=4096):
+Green region = two-hop wins. **Breakeven hierarchy ratio** (the smallest hierarchy ratio at
+which two-hop starts to win, q=3, T=4096):
 
-| 实现档 | breakeven 层级比 |
+| Implementation tier | breakeven hierarchy ratio |
 |---|---|
-| PyTorch 到达链(实测 0.0875 µs/行) | **4.20** |
-| 融合 kernel(估 0.012) | **1.57** |
-| 零实现开销(上界) | 1.16 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | **4.20** |
+| Fused kernel (est. 0.012) | **1.57** |
+| Zero implementation overhead (upper bound) | 1.16 |
 
-一句话结论:**实现档把 breakeven 从 4.2 拉到 1.6** —— NVLink/IB(≈3.2)这类
-常见层级机,分层通信值不值得做,取决于你的到达链写得好不好,不取决于拓扑。
+One-sentence takeaway: **the implementation tier pulls breakeven from 4.2 down to 1.6** — on
+common hierarchical machines like NVLink/IB (≈3.2), whether hierarchical communication is worth
+doing depends on how well your arrival chain is written, not on the topology.
 
-### 误差带:结论对标定误差稳不稳?
+### Uncertainty bands: is the conclusion stable against calibration error?
 
-![误差带](assets/f9-uncertainty.svg)
+![uncertainty bands](assets/f9-uncertainty.svg)
 
-标定常数不是真值,是带散布的测量(机台发间漂移实测 ±9~20%)。400 次蒙特卡洛
-把散布传播到外推(口径逐项注明出处,见 `sim/uncertainty.py`;固定种子,重跑
-逐位一致)。两条鲁棒性锚:
+Calibration constants are not ground truth; they are measurements with spread (measured machine
+run-to-run drift ±9~20%). 400 Monte Carlo draws propagate that spread into the extrapolation
+(provenance noted item by item, see `sim/uncertainty.py`; fixed seed, reruns match bit for bit).
+Two robustness anchors:
 
-- 扁平列最有利情形(零实现开销)p95 = **0.99 ≤ 1**:我们在扁平机上的判负
-  对标定误差鲁棒 —— 但只差 0.01,这句结论写到这个精度为止,不再加码;
-- 8× 列最不利情形(PyTorch 链)p5 = **1.37 > 1**:层级机上两跳赢的方向
-  对标定误差鲁棒。
+- Flat column, most favorable case (zero implementation overhead): p95 = **0.99 ≤ 1** — our
+  negative verdict on the flat machine is robust to calibration error; but the margin is only
+  0.01, so the claim stops at this precision and gets no further embellishment;
+- 8× column, least favorable case (PyTorch chain): p5 = **1.37 > 1** — on hierarchical machines,
+  the direction "two-hop wins" is robust to calibration error.
 
-### 规模效应:大集群的赢面从哪来?
+### Scale effects: where does the large-cluster advantage come from?
 
-![规模效应](assets/f10-scale-alpha.svg)
+![scale effects](assets/f10-scale-alpha.svg)
 
-固定层级比 3.2、融合档,把集群从 32 卡放大到 512 卡:两跳的比值从 1.47(128 卡)
-走到 1.94(512 卡)——但对照的"平坦 α 反事实机器"是 1.44 → 1.38。**额外赢面
-几乎全部来自 α(world) 随规模的增长**(一跳付 α(512)=1.86 ms,两跳付
-α(64)+α(8)≈0.36 ms),而本机 α 曲线在 >128 卡段是借来的形状(图中阴影)。
-结论的正确读法:**α 形状是机器性质 —— 大集群上两跳是否额外赚,换机必须重标 α。**
+Fix hierarchy ratio 3.2 and the fused tier, scale the cluster from 32 dies to 512 dies: the
+two-hop ratio goes from 1.47 (128 dies) to 1.94 (512 dies) — while the "flat-α counterfactual
+machine" control goes 1.44 → 1.38. **Nearly all of the extra advantage comes from α(world)
+growing with scale** (one-hop pays α(512)=1.86 ms, two-hop pays α(64)+α(8)≈0.36 ms), and this
+machine's α curve beyond 128 dies is a borrowed shape (shaded in the figure). The correct
+reading of the conclusion: **α shape is a machine property — whether two-hop gains extra on a
+large cluster requires re-calibrating α on any new machine.**
 
-几何敏感性(54 组 (组数, R, k, M) 网格,`sim.uncertainty.geometry_grid`)同向:
-世界越大 breakeven 越低,512 卡时若干几何 breakeven=1.0(纯 α 效应)。三条轴的
-影响幅度排序(融合档,按 breakeven 的挪动量实算):**实现档最大**(4.20 → 1.16,
-Δ≈3.0)> 规模轴(32 → 512 卡,Δ≤1.9)> 几何轴(固定世界下 (k,M) 挪 ±0.2~0.3;
-PyTorch 档下几何轴放大到 ±1.2,但排序不变)。
+Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.geometry_grid`)
+points the same way: the larger the world, the lower the breakeven; at 512 dies several
+geometries hit breakeven=1.0 (a pure α effect). Ranking the three axes by how far they actually
+move breakeven (fused tier): **implementation tier largest** (4.20 → 1.16, Δ≈3.0) > scale axis
+(32 → 512 dies, Δ≤1.9) > geometry axis ((k,M) moves ±0.2~0.3 at fixed world; under the PyTorch
+tier the geometry axis widens to ±1.2, but the ordering stands).
 
-## 步级合成(Tier-2)的攻坚记录
+## The Tier-2 step-level synthesis campaign record
 
-单参数全局重叠模型六族全灭,负结果 + 破局测量协议见
-**[docs/07-tier2-overlap.md](07-tier2-overlap.md)** —— 步级外推维持封禁,
-但「缺哪种测量、怎么测、自洽怎么验」已经写成任何有集群的人可照跑的协议。
+All six families of single-parameter global overlap models are dead; the negative result plus
+the breakthrough measurement protocol are in
+**[docs/07-tier2-overlap.md](07-tier2-overlap.md)** — step-level extrapolation stays locked,
+but "which measurement is missing, how to take it, and how to verify self-consistency" is now
+written up as a protocol anyone with a cluster can run as-is.
 
-## 换你自己的机器
+## Bring your own machine
 
-1. 用与 `docs/03 §4` 相同口径测三样:α(按 world)、β(对齐口径)、
-   每次调用的固定成本;
-2. 填一个 `ClusterSpec`(照 `sim/calibrate.py::flat_supernode` 的样子);
-3. 用你机器上的同型微基准替换 `sim/validate_micro.py::MICRO_TARGETS`,重新过门;
-4. 门绿了再看 `python -m sim.sweep` 的外推。
+1. Measure three things with the same conventions as `docs/03 §4`: α (by world size), β
+   (aligned-payload convention), and per-call fixed cost;
+2. Fill in a `ClusterSpec` (model it on `sim/calibrate.py::flat_supernode`);
+3. Replace `sim/validate_micro.py::MICRO_TARGETS` with the same-type microbenchmarks from your
+   machine, and re-pass the gates;
+4. Only after the gates are green, look at the `python -m sim.sweep` extrapolation.
 
-## 跑
+## Run
 
 ```
-python -m sim.validate_micro     # Tier-1 门
-python -m sim.validate           # Tier-2 门(当前如实显示不通过)
-python -m sim.sweep              # 外推(入口处查门)
-python -m sim.overlap            # Tier-2 攻坚:重叠模型族战报(docs/07)
-python -m sim.uncertainty        # 蒙特卡洛误差带 + breakeven(固定种子)
-python tools/gen_sim_figures.py  # 重生成 F7-F12(数字现场计算;唯 F12 内嵌实测)
+python -m sim.validate_micro     # Tier-1 gate
+python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
+python -m sim.sweep              # extrapolation (checks the gates at entry)
+python -m sim.overlap            # Tier-2 campaign: overlap model family battle report (docs/07)
+python -m sim.uncertainty        # Monte Carlo uncertainty bands + breakeven (fixed seed)
+python tools/gen_sim_figures.py  # regenerate F7-F12 (numbers computed live; only F12 embeds measurements)
 python -m pytest tests/test_sim.py -q
 ```

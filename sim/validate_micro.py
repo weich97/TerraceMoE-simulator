@@ -1,23 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Tier-1 验证门:通信微观层 —— 模型 vs 同机直测的两种策略耗时。
+"""Tier-1 validation gate: the communication micro level -- model vs same-machine direct measurements of both strategies.
 
-## 为什么门的目标是「多发合并中位」而不是单发
+## Why the gate targets pooled multi-run medians, not single runs
 
-同一基准在同一台机上连跑,发间漂移 ~20%(例:两跳 @2048 tok 三发分别
-0.648 / 0.772 / 0.711 ms)。单发目标的分辨率低于机台漂移,门的红绿等于掷骰 ——
-我们在这上面栽过(第一版恰好用了一发"顺手"的数据,过了门;换成另一发就不过)。
-**量具的分辨率必须优于要测的效应**,对验证门同样成立。
+The same benchmark run back-to-back on the same machine drifts ~20% run to run (example:
+two-hop @2048 tok, three runs at 0.648 / 0.772 / 0.711 ms). A single-run target has
+resolution below the machine drift, so the gate's red/green becomes a dice roll -- we got
+burned by this (the first version happened to use one "convenient" run and passed; swap
+in another run and it fails). **The instrument's resolution must beat the effect being
+measured** -- that holds for validation gates too.
 
-## 预注册门(阈值先于目标值写死)
+## Preregistered gate (thresholds frozen before the target values)
 
-  相对误差:中位 ≤ 20%,最大 ≤ 35%;
-  交叉点(一跳/两跳 从 <1 变 >1 再回落的换向位置)落在实测窗口 [2048, 16384]。
+  Relative error: median ≤ 20%, worst ≤ 35%;
+  crossover (where one-hop/two-hop flips from <1 to >1 and back) falls inside the
+  measured window [2048, 16384].
 
-Tier-1 过 = 允许**通信级**外推。步级外推另由 Tier-2 把守(sim/validate.py)。
+Tier-1 pass = **communication-level** extrapolation allowed. Step-level extrapolation is
+guarded separately by Tier-2 (sim/validate.py).
 
-## 目标值(4 发合并中位;基准为纯通信形态:定长等分、无 counts 交换、无到达链)
+## Target values (pooled medians over 4 runs; benchmark is the pure-communication form: fixed-length equal splits, no counts exchange, no arrival chain)
 
-外部使用者换机器时:用 bench 同款口径重测,替换这张表,重新过门。
+External users on a different machine: re-measure with the same bench convention, replace
+this table, re-run the gate.
 """
 from __future__ import annotations
 
@@ -25,8 +30,9 @@ import dataclasses
 
 from .core import MoEGeometry, one_hop_call, two_hop_call
 
-# (token/rank, 一跳 ms, 两跳 ms, 参与合并的 run 数)
-# 口径:16 组 x 8 卡,k=6/M=2 的行数结构;<256 token 的档发间散布 1.8-2.4,不作目标
+# (token/rank, one-hop ms, two-hop ms, number of runs pooled)
+# Convention: 16 groups x 8 cards, k=6/M=2 row structure; the tiers below 256 tokens
+# have run-to-run spread 1.8-2.4 and are not targets
 MICRO_TARGETS = [
     (256, 0.394, 0.340, 4),
     (1024, 0.639, 0.510, 2),
@@ -63,16 +69,16 @@ def validate_micro(cluster, verbose: bool = True):
 
     ok = (med <= 0.20) and (worst <= 0.35) and cross_ok
     if verbose:
-        print("Tier-1(通信微观)vs 多发合并中位")
+        print("Tier-1 (communication micro level) vs pooled multi-run medians")
         print("%6s %4s  %8s %8s %7s   %8s %8s %7s" %
-              ("tok", "runs", "一跳实测", "预测", "误差", "两跳实测", "预测", "误差"))
+              ("tok", "runs", "1hop ms", "pred", "err", "2hop ms", "pred", "err"))
         for tok, mv, pv, ev, mt, pt, et, n in rows:
             print("%6d %4d  %8.3f %8.3f %+6.1f%%   %8.3f %8.3f %+6.1f%%" %
                   (tok, n, mv, pv, ev * 100, mt, pt, et * 100))
-        print("相对误差:中位 %.1f%%(门 20)最大 %.1f%%(门 35);交叉点 %s(门 [2048,16384])"
+        print("relative error: median %.1f%% (gate 20), worst %.1f%% (gate 35); crossover %s (gate [2048,16384])"
               % (med * 100, worst * 100,
-                 "%s-%s" % (cross_lo, cross_hi) if cross_lo else "未穿过"))
-        print("**Tier-1 %s**" % ("通过 —— 允许通信级外推" if ok else "不通过"))
+                 "%s-%s" % (cross_lo, cross_hi) if cross_lo else "no crossing"))
+        print("**Tier-1 %s**" % ("PASS -- communication-level extrapolation allowed" if ok else "FAIL"))
     return ok, {"median": med, "worst": worst,
                 "cross": (cross_lo, cross_hi), "rows": rows}
 

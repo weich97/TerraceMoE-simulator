@@ -1,24 +1,28 @@
 /**
- * terrace_ops -- torch.library 绑定:torch.ops.terrace.* -> aclnn 两段式调用。
+ * terrace_ops -- torch.library binding: torch.ops.terrace.* -> aclnn two-phase calls.
  *
- * 只在集群编译(python csrc/build_ext.py,需 torch_npu + 已安装的 opp vendor 包)。
- * 结构照 CANN 官方 PytorchInvocation 路数:schema 注册(TORCH_LIBRARY)+
- * PrivateUse1(NPU)实现 + Meta 实现(fake tensor 形状推导用)。
+ * Compiled on the cluster only (python csrc/build_ext.py; needs torch_npu plus
+ * the installed opp vendor package). Structure follows CANN's official
+ * PytorchInvocation route: schema registration (TORCH_LIBRARY) + PrivateUse1
+ * (NPU) implementation + Meta implementation (for fake-tensor shape inference).
  *
- * aclnn 符号(aclnnTerracePassthrough{GetWorkspaceSize,}) 来自 opp 包装出的
- * libcust_opapi.so,build_ext.py 直接链它 -- 编译期缺符号即失败,fail loud,
- * 不做 dlopen 延迟绑定。
+ * The aclnn symbols (aclnnTerracePassthrough{GetWorkspaceSize,}) come from
+ * libcust_opapi.so wrapped by the opp package; build_ext.py links it directly
+ * -- a missing symbol fails at compile time, fail loud, no dlopen lazy binding.
  *
- * K1(terrace::k1_arrival,2026-08-20 落地):
- *   - schema:k1_arrival(Tensor rx, Tensor rslot, Tensor rgate, int quota,
+ * K1 (terrace::k1_arrival, landed 2026-08-20):
+ *   - schema: k1_arrival(Tensor rx, Tensor rslot, Tensor rgate, int quota,
  *     int epr, int rpn, int my_local) -> (Tensor, Tensor, Tensor, Tensor, Tensor)
  *     = (send_buf, gate_pairs, r_idx, slot_idx, i_send);
- *   - 功能规格 = 到达侧现组合链逐位复刻,见 op_kernel/terrace_k1_arrival.cpp
- *     文件头(两遍法 + 稳定序逐位一致论证);
- *   - send_buf/gate_pairs 可微(反向 = 现组合链 scatter-add/gather,Python 侧
- *     autograd.Function 承担);r_idx/slot_idx/i_send 是索引/计数平面,Python 侧
- *     mark_non_differentiable;
- *   - int64 rslot 直接进 kernel(int32 lo/hi 标量访问,不发 int64 向量指令)。
+ *   - functional spec = a bit-for-bit replica of the current arrival-side
+ *     composite chain, see the op_kernel/terrace_k1_arrival.cpp file header
+ *     (two-pass method + the stable-ordering bit-for-bit argument);
+ *   - send_buf/gate_pairs are differentiable (backward = the composite chain's
+ *     scatter-add/gather, carried by a Python-side autograd.Function);
+ *     r_idx/slot_idx/i_send are index/count planes, mark_non_differentiable on
+ *     the Python side;
+ *   - int64 rslot goes straight into the kernel (int32 lo/hi scalar access, no
+ *     int64 vector instructions issued).
  */
 #include <map>
 #include <vector>
@@ -27,26 +31,30 @@
 #include <torch/library.h>
 
 #include "acl/acl.h"
-// aclTensor 构造/销毁。个别 CANN 8.x 发行版头文件名不同:若编译报找不到,
-// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(构建脚本 ascendc/build.sh 的头注)。
+// aclTensor create/destroy. Some CANN 8.x releases name this header
+// differently: if the compile cannot find it, grep -rl aclCreateTensor under
+// ${ASCEND_HOME_PATH}/include and use the real name (header comment of the
+// build script ascendc/build.sh).
 #include "aclnn/acl_meta.h"
-// opp vendor 包安装后生成的算子专属头(vendors/<vendor>/op_api/include)。
+// Op-specific headers generated once the opp vendor package is installed
+// (vendors/<vendor>/op_api/include).
 #include "aclnn_terrace_passthrough.h"
 #include "aclnn_terrace_k1_arrival.h"
 
-// torch_npu:取当前 NPU 流。头/库路径由 build_ext.py 注入。
+// torch_npu: grab the current NPU stream. Header/library paths injected by
+// build_ext.py.
 #include "torch_npu/csrc/core/npu/NPUStream.h"
 
 namespace {
 
-// at::Tensor -> aclTensor 视图(不拷数据)。contiguous 由调用方保证。
+// at::Tensor -> aclTensor view (no data copy). The caller guarantees contiguous.
 aclTensor *MakeAclTensor(const at::Tensor &t)
 {
     static const std::map<at::ScalarType, aclDataType> kDtype = {
         {at::kHalf, ACL_FLOAT16},
         {at::kBFloat16, ACL_BF16},
         {at::kFloat, ACL_FLOAT},
-        {at::kLong, ACL_INT64},        // K1 的 rslot / r_idx / slot_idx / i_send
+        {at::kLong, ACL_INT64},        // K1's rslot / r_idx / slot_idx / i_send
     };
     auto it = kDtype.find(t.scalar_type());
     TORCH_CHECK(it != kDtype.end(), "terrace ops: unsupported dtype ",
@@ -74,9 +82,11 @@ at::Tensor passthrough_npu(const at::Tensor &x)
                                                        &executor);
     TORCH_CHECK(ret == ACL_SUCCESS,
                 "aclnnTerracePassthroughGetWorkspaceSize failed: ", ret,
-                " (host tiling 拒绝了这个形状? 样板要求 32B 整除,构建脚本 ascendc/build.sh 的头注)");
+                " (did host tiling reject this shape? the template requires 32B "
+                "divisibility, header comment of the build script ascendc/build.sh)");
 
-    // workspace 用 torch 的 NPU 缓存分配器拿,免手工 aclrtMalloc/生命周期管理。
+    // Workspace comes from torch's NPU caching allocator; no manual
+    // aclrtMalloc / lifetime management.
     at::Tensor workspace;
     void *workspacePtr = nullptr;
     if (workspaceSize > 0) {
@@ -96,11 +106,12 @@ at::Tensor passthrough_npu(const at::Tensor &x)
 
 at::Tensor passthrough_meta(const at::Tensor &x)
 {
-    return at::empty_like(x);   // 形状推导:输出形状/dtype == 输入
+    return at::empty_like(x);   // shape inference: output shape/dtype == input
 }
 
 // ======================================================================================
-// K1:到达侧融合链(功能规格与逐位论证见 op_kernel/terrace_k1_arrival.cpp 文件头)。
+// K1: the arrival-side fused chain (functional spec and the bit-for-bit
+// argument live in the op_kernel/terrace_k1_arrival.cpp file header).
 // ======================================================================================
 
 using K1Out = std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>;
@@ -126,7 +137,8 @@ K1Out k1_arrival_npu(const at::Tensor &rx, const at::Tensor &rslot,
     TORCH_CHECK(quota > 0 && epr > 0 && rpn > 0 && epr * rpn <= 63 &&
                 my_local >= 0 && my_local < rpn,
                 "terrace::k1_arrival: bad geometry scalars");
-    // host tiling 拒绝非 32B 整除的行宽(样板同款 fail loud);这里先给人话报错。
+    // Host tiling rejects row widths not divisible into 32B (same fail-loud as
+    // the template); give the human-readable error here first.
     TORCH_CHECK((rx.size(1) * rx.element_size()) % 32 == 0,
                 "terrace::k1_arrival: hidden*esize must be 32B-aligned, got H=",
                 rx.size(1), " esize=", rx.element_size());
@@ -140,7 +152,8 @@ K1Out k1_arrival_npu(const at::Tensor &rx, const at::Tensor &rslot,
     at::Tensor gate_pairs = at::empty({P}, rgatec.options());
     at::Tensor r_idx = at::empty({P}, rslotc.options());
     at::Tensor slot_idx = at::empty({P}, rslotc.options());
-    // i_send 用 zeros:P == 0 时 kernel 不发射(下方短路),零直方图即正确答案。
+    // i_send uses zeros: when P == 0 the kernel never launches (short-circuit
+    // below) and the zero histogram is the correct answer.
     at::Tensor i_send = at::zeros({rpn}, rslotc.options());
     if (P == 0) {
         return {send_buf, gate_pairs, r_idx, slot_idx, i_send};
@@ -157,15 +170,18 @@ K1Out k1_arrival_npu(const at::Tensor &rx, const at::Tensor &rslot,
 
     uint64_t workspaceSize = 0;
     aclOpExecutor *executor = nullptr;
-    // aclnn 生成签名顺序:输入张量 -> int 属性 -> 输出张量(msopgen aclnn 约定;
-    // 若本 drop 生成的头顺序不同,以 aclnn_terrace_k1_arrival.h 为准 —— 集群编译
-    // 验证点,编译期签名不符即报错,fail loud)。
+    // aclnn generated signature order: input tensors -> int attributes ->
+    // output tensors (the msopgen aclnn convention; if this drop's generated
+    // header orders things differently, aclnn_terrace_k1_arrival.h is
+    // authoritative -- a cluster-compile verification point; a signature
+    // mismatch errors at compile time, fail loud).
     auto ret = aclnnTerraceK1ArrivalGetWorkspaceSize(
         rxAcl, rslotAcl, rgateAcl, quota, epr, rpn, my_local,
         sendAcl, gateAcl, ridxAcl, slotAcl, isendAcl, &workspaceSize, &executor);
     TORCH_CHECK(ret == ACL_SUCCESS,
                 "aclnnTerraceK1ArrivalGetWorkspaceSize failed: ", ret,
-                " (host tiling 拒绝了这个几何? 见 op_host/terrace_k1_arrival.cpp)");
+                " (did host tiling reject this geometry? see "
+                "op_host/terrace_k1_arrival.cpp)");
 
     at::Tensor workspace;
     void *workspacePtr = nullptr;
@@ -204,9 +220,11 @@ K1Out k1_arrival_meta(const at::Tensor &rx, const at::Tensor &rslot,
 
 }  // namespace
 
-// schema 与实现分开注册:autograd 由 Python 侧 autograd.Function 承担
-// (terrace/ops/__init__.py),这里不注册 Autograd key -- K1/K2 反向走组合链,
-// kernel 只出现在 forward(内部设计记录(未随仓发布)拍板)。
+// Schema and implementations register separately: autograd is carried by the
+// Python-side autograd.Function (terrace/ops/__init__.py), no Autograd key here
+// -- the K1/K2 backward takes the composite chain, the kernel appears in
+// forward only (decided in internal design records, not published with this
+// repo).
 TORCH_LIBRARY(terrace, m)
 {
     m.def("passthrough(Tensor x) -> Tensor");

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="TerraceMoE Simulator logo: a token hops down three terraces, then fans out across the lowest one">
+  <!-- Three terraces: the bandwidth levels of a hierarchical fabric, widening
+       as the domain grows. -->
+  <rect x="10" y="32" width="46"  height="18" rx="4" fill="#2F6B4F"/>
+  <rect x="10" y="62" width="76"  height="18" rx="4" fill="#3A7D5C"/>
+  <rect x="10" y="92" width="106" height="18" rx="4" fill="#4C9070"/>
+
+  <!-- Hop A: one deduplicated copy hops down across the slow boundaries. -->
+  <path d="M 30 24 Q 52 20 62 54"  fill="none" stroke="#C4823B" stroke-width="3.6" stroke-linecap="round"/>
+  <path d="M 62 54 Q 84 50 94 84"  fill="none" stroke="#C4823B" stroke-width="3.6" stroke-linecap="round"/>
+
+  <!-- Hop B: the fast fan-out inside the arrival group. -->
+  <g stroke="#5B8DB8" stroke-width="2.8" stroke-linecap="round" fill="none">
+    <path d="M 94 84 L 106 75"/>
+    <path d="M 94 84 L 110 84"/>
+    <path d="M 94 84 L 104 95"/>
+  </g>
+
+  <!-- The token at each stop: source, relay, arrival. -->
+  <circle cx="30" cy="24" r="6.5" fill="#C4823B"/>
+  <circle cx="62" cy="54" r="6.5" fill="#C4823B"/>
+  <circle cx="94" cy="84" r="6.5" fill="#C4823B"/>
+  <g fill="#5B8DB8">
+    <circle cx="108.5" cy="72.5" r="3.8"/>
+    <circle cx="113"   cy="84"   r="3.8"/>
+    <circle cx="106"   cy="97.5" r="3.8"/>
+  </g>
+</svg>

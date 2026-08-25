@@ -1,68 +1,68 @@
-# 适用判据:什么集群该用,什么集群别用
+# Applicability Criterion: Which Clusters Should Use This, and Which Should Not
 
-本篇是这个仓库存在的原因。**结论先行:这套方法面向层级化特征明显的集群;在带宽扁平的互联上,两跳不划算——我们自己测到的。**
+This doc is why the repo exists. **Conclusion first: this method targets clusters with pronounced hierarchy; on bandwidth-flat interconnects, two-hop does not pay — we measured that ourselves.**
 
-## 1. 盈亏平衡的推导
+## 1. Deriving the breakeven
 
-记快侧(组内)带宽 β_f,慢侧(跨组)带宽 β_s,组内 R 张卡,每 token 每入选组 q 个专家,每行载荷 B 字节(H × dtype 宽度)。每 token 每目标组的传输时间:
+Write β_f for the fast-side (intra-group) bandwidth, β_s for the slow-side (cross-group) bandwidth, R cards per group, q experts per token per selected group, and B payload bytes per row (H × dtype width). Transfer time per token per target group:
 
 ```
-一跳:  t1 = qB / β_s
-两跳:  t2 = 1·B / β_s  +  q(1 − 1/R)·B / β_f
+one-hop:  t1 = qB / β_s
+two-hop:  t2 = 1·B / β_s  +  q(1 − 1/R)·B / β_f
 ```
 
-两跳净赚 ⇔ t2 < t1 ⇔
+Two-hop nets out ahead ⇔ t2 < t1 ⇔
 
 **r_be = (1 − 1/R) · q / (q − 1)  <  β_f / β_s**
 
-要点:
+Key points:
 
-- r_be **随 q 单调下降**,极限 (1 − 1/R)。R=8:q=2 → 1.75,q=3 → 1.31,q=6 → 1.05,q=8 → 1.00。**小配额(强限组)反而要求更深的层级** —— 因为可省的慢侧行数少。
-- 该式假设两侧都按 (token, expert) 逐份发。两跳侧若做**卡级去重**,分子的 q 换成期望命中卡数 D(q) < q,判据放宽(`tools/breakeven.py --dedup`)。
-- 推导只算字节。**α 侧(每次集合通信的固定开销)是第二道关**,见 §4。
+- r_be **decreases monotonically in q**, with limit (1 − 1/R). R=8: q=2 → 1.75, q=3 → 1.31, q=6 → 1.05, q=8 → 1.00. **Small quotas (strong group-limiting) actually demand a deeper hierarchy** — there are fewer slow-side rows to save.
+- The formula assumes both sides send one copy per (token, expert). If the two-hop side does **card-level dedup**, the q in the numerator becomes the expected hit-card count D(q) < q and the criterion relaxes (`tools/breakeven.py --dedup`).
+- The derivation counts bytes only. **The α side (per-collective fixed overhead) is a second gate to clear**, see §4.
 
-## 2. 各类互联落在哪
+## 2. Where the interconnect classes land
 
-| 互联 | β_f/β_s(量级,以实测为准) | q=3 判据(需 >1.31) |
+| Interconnect | β_f/β_s (order of magnitude; trust your own measurements) | q=3 criterion (needs >1.31) |
 |---|---|---|
-| NVLink 域内 vs 跨节点 IB | ~3× 起 | 通过 |
-| 服务器内高速总线 vs 跨服务器 RoCE | ~8× | 通过 |
-| 超节点内 vs 跨超节点 | 数倍(且跨超节点集合通信常随 incast 恶化) | 通过(若你真的把 EP 跨出超节点——见 §5) |
-| **扁平超节点内部**(统一交换芯片,跨节点 p2p ≈ 节点内) | **~1.0** | **不通过** |
+| NVLink domain vs cross-node IB | ~3× and up | passes |
+| in-server high-speed bus vs cross-server RoCE | ~8× | passes |
+| intra-supernode vs cross-supernode | several × (and cross-supernode collectives often degrade under incast) | passes (if you actually stretch EP beyond the supernode — see §5) |
+| **inside a flat supernode** (unified switch silicon, cross-node p2p ≈ intra-node) | **~1.0** | **fails** |
 
-同族方法的公开正面证据(层级化互联上):DeepSeek-V3 训练(node-limited 路由 + 跨节点先送一份再节点内转发,NVLink vs IB);TeleChat3-MoE(分层 EP A2A,报 EP=16 训练吞吐 +15%);Pangu Ultra MoE(同族分层 A2A)。**这些工作成立的共同前提正是层级比 ≫ r_be。**
+Public positive evidence for this method family (on hierarchical interconnects): DeepSeek-V3 training (node-limited routing + send once across nodes, then forward inside the node; NVLink vs IB); TeleChat3-MoE (hierarchical EP A2A, reports +15% training throughput at EP=16); Pangu Ultra MoE (same-family hierarchical A2A). **The shared precondition that makes these work is exactly hierarchy ratio ≫ r_be.**
 
-## 3. 我们的负结果(扁平超节点,完整交代)
+## 3. Our negative result (flat supernode, full disclosure)
 
-我们在一台带宽扁平的超节点(16 节点 × 8 卡,跨节点 p2p 与节点内带宽比 ≈ 1.0,平坦到 2.6% 以内)上把 T-A2A 完整建成,做了 **7 个几何的同配置端到端对照**(只换 a2a 实现,其余逐字相同;步时取稳态中位,G = t(一跳)/t(两跳),>1 = 两跳快):
+On a bandwidth-flat supernode (16 nodes × 8 cards, cross-node p2p to intra-node bandwidth ratio ≈ 1.0, flat to within 2.6%) we built T-A2A out in full and ran **same-config end-to-end comparisons across 7 geometries** (only the a2a implementation is swapped, everything else identical to the letter; step time is the steady-state median; G = t(one-hop)/t(two-hop), >1 = two-hop faster):
 
-![判决床全景](assets/f11-verdict-bed.svg)
+![Verdict testbed panorama](assets/f11-verdict-bed.svg)
 
-| 轴 | 几何 | G(实测) | 发数 |
+| Axis | Geometry | G (measured) | Runs |
 |---|---|---|---|
-| — | 基准点(16 节点,T=4096,k6M2,MBS=1) | **1.0355** | n=7,t=3.27,**p≈0.017 显著** |
-| token ×2 | 同上,MBS=2 | 0.8845 | n=3,散布 0.8% |
-| token ×4 | 同上,MBS=4 | 0.8234 | n=3,散布 0.6% |
-| 负载 | k8M2 | 0.9935 | n=1 |
-| 负载 | k8M4 | 0.9335 | n=1 |
-| 规模 | 8 节点 | 0.9027 | n=1 |
-| 规模 | 4 节点 | 0.8647 | n=1 |
+| — | baseline point (16 nodes, T=4096, k6M2, MBS=1) | **1.0355** | n=7, t=3.27, **p≈0.017 significant** |
+| token ×2 | same, MBS=2 | 0.8845 | n=3, spread 0.8% |
+| token ×4 | same, MBS=4 | 0.8234 | n=3, spread 0.6% |
+| load | k8M2 | 0.9935 | n=1 |
+| load | k8M4 | 0.9335 | n=1 |
+| scale | 8 nodes | 0.9027 | n=1 |
+| scale | 4 nodes | 0.8647 | n=1 |
 
-三条轴的走向全部与机制一致,这比单点数字更有说服力:
+All three axes trend in the direction the mechanism predicts, which is more convincing than any single number:
 
-- **token 轴单调降**:token 越多越带宽主导,而两跳在唯一起作用的资源(每卡出口)上净多搬约 8% 的字节;
-- **规模轴单调降**:节点越少,Hop A 可省的对端越少,两跳的相对开销越大;
-- **负载轴同向**:跨组扇出(M)越宽,两跳越接近一跳的通信形态、只剩额外成本;
-- **唯一的正值(+3.6%,显著)的位置与微观账对得上**:同机通信微基准里,4096 token/rank 档恰在两跳纯通信占优的窗口(一跳 1.366 ms vs 两跳 1.217 ms,见 `sim/validate_micro.py`),扣掉到达链等实现成本后剩下这 3.6%;token 一涨(8192 档起)微观窗口关闭,端到端同步转负。注意**不是** α 节省——本机直测 α(16)+α(8) ≈ α(128),两跳在固定开销上几乎不占便宜(docs/05 标定要点)。
+- **the token axis falls monotonically**: more tokens means more bandwidth-dominated, and two-hop moves a net ~8% more bytes through the only resource that matters here (per-card egress);
+- **the scale axis falls monotonically**: fewer nodes means fewer peers Hop A can save, so two-hop's relative overhead grows;
+- **the load axis points the same way**: the wider the cross-group fan-out (M), the closer two-hop gets to one-hop's communication shape, leaving only the extra cost;
+- **the single positive value (+3.6%, significant) sits exactly where the micro-level books say it should**: in the same-machine communication microbenchmark, the 4096 token/rank tier lands precisely inside the window where two-hop wins on pure communication (one-hop 1.366 ms vs two-hop 1.217 ms, see `sim/validate_micro.py`); subtract implementation costs such as the arrival chain and this 3.6% is what remains. As soon as tokens grow (from the 8192 tier up), the micro window closes and end-to-end turns negative in step. Note this is **not** α savings — direct measurement on this machine gives α(16)+α(8) ≈ α(128); two-hop gains almost nothing on fixed overhead (docs/05, calibration notes).
 
-**这个负结果限定于"扁平互联 + 该实现"**:判负的是"在没有层级的机器上做分层",不是分层本身。同一套判据在层级比 ≥ 1.5 的机器上给出相反的判定(层级机上的仿真外推与误差带见 [docs/05](05-simulator.md))。这 7 个点同时是仿真器 Tier-2 验证门的真值集(`sim/validate.py::HOLDOUTS`,数字同源)。
+**This negative result is scoped to "flat interconnect + this implementation"**: what got the negative verdict is "doing hierarchy on a machine that has none", not hierarchy itself. The same criterion returns the opposite verdict on machines with hierarchy ratio ≥ 1.5 (simulator extrapolation and uncertainty bands for hierarchical machines: [docs/05](05-simulator.md)). These 7 points also serve as the ground-truth set for the simulator's Tier-2 validation gate (`sim/validate.py::HOLDOUTS`, same source numbers).
 
-## 4. 判据之外还要核的三件事(踩坑清单)
+## 4. Three things to check beyond the criterion (pitfall list)
 
-1. **α 侧**:两跳每次 dispatch 多一次集合通信。实测你的平台上 a2a 的固定开销随对端数怎么长——如果 α 几乎不随对端数变,两跳在小消息端也讨不到好。
-2. **消息尺寸效应**:集合通信带宽可能强依赖每对端字节数的对齐(我们观测到按 2 的幂阶梯变化的实现行为)。**基准必须用你真实的行宽(H × dtype)的整数倍**,否则测的是对齐效应,整段结论会是假的。
-3. **量具分辨率**:先测量具自身的噪声(重复散布、launch 开销地板),门槛必须大于噪声。我们在这三处各栽过一次,教训都写进了测试。
+1. **The α side**: two-hop adds one collective per dispatch. Measure how your platform's a2a fixed overhead grows with peer count — if α barely varies with peer count, two-hop gains nothing at the small-message end either.
+2. **Message-size effects**: collective bandwidth can depend strongly on the alignment of per-peer byte counts (we observed implementation behavior stepping in power-of-2 stairs). **Benchmarks must use integer multiples of your real row width (H × dtype)** — otherwise you are measuring alignment effects and the entire conclusion is fake.
+3. **Instrument resolution**: measure the instrument's own noise first (repeat spread, launch overhead floor); your threshold must exceed the noise. We crashed once at each of these three spots; the lessons are all written into the tests.
 
-## 5. 一个边界观察
+## 5. A boundary observation
 
-截至我们调研(2026-08),机柜级/超节点级高带宽域一旦存在,公开的训练侧部署都把 EP 关在域内、跨域走 DP/PP(8 卡 NVLink 域的代次训练 EP 常跨节点——那正是本方法族的经典场景);把 EP 跨出**超节点级**域的公开工作还没有。若你的场景必须跨(域内装不下专家,或容错后域残缺),两跳的判据在那个层级上是轻松通过的——但你会是先行者,α 侧与 incast 行为没有公开数据,须自测。
+As of our survey (2026-08), wherever a rack-level/supernode-level high-bandwidth domain exists, public training-side deployments keep EP inside the domain and go DP/PP across domains (the generation trained on 8-card NVLink domains routinely ran EP across nodes — exactly the classic scenario for this method family); no public work yet stretches EP beyond a **supernode-level** domain. If your scenario must cross it (the experts don't fit inside the domain, or fault tolerance left the domain degraded), the two-hop criterion passes easily at that level — but you would be first: there is no public data on α behavior and incast there, and you must measure it yourself.

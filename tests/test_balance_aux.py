@@ -4,7 +4,7 @@ WHY THIS EXISTS
 The previous _balance_aux computed sum_i f_i^2 from bincount loads alone. Counts carry no
 gradient, so the aux raised the reported loss without exerting any pressure on any
 parameter -- a knob wired to nothing (2026-08-02 full-repo review, finding H3). The
-上游训练栈 arms are unaffected (they use Megatron's seq_aux_loss); this covers the
+upstream-training-stack arms are unaffected (they use Megatron's seq_aux_loss); this covers the
 pure-PyTorch reference stack that the open-source release ships.
 
 Two properties, each of which the old implementation violated or could not demonstrate:

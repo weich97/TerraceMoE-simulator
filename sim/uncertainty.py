@@ -1,28 +1,33 @@
 # -*- coding: utf-8 -*-
-"""外推的不确定度:蒙特卡洛标定扰动 + breakeven(盈亏平衡层级比)。
+"""Uncertainty of the extrapolation: Monte Carlo calibration perturbation + breakeven hierarchy ratio.
 
-## 为什么要这个模块(多数仿真工作缺的第二环)
+## Why this module exists (the second link most simulation work is missing)
 
-标定常数不是真值,是带散布的测量。机台发间漂移是实测过的
-(同基准三发 t(2048) = 0.648/0.772/0.711,±9% 左右;α 档漂移 ~20%)。
-**一张没有误差带的外推表,读者没法判断"2.18x"和"1.9-2.5x"的区别** ——
-而结论稳不稳恰恰取决于带的两端,不是中位数。
+Calibration constants are not ground truth; they are measurements with spread. The
+machine's run-to-run drift is itself measured (same benchmark, three runs,
+t(2048) = 0.648/0.772/0.711, about ±9%; the alpha tier drifts ~20%).
+**An extrapolation table without uncertainty bands leaves the reader unable to tell
+"2.18x" from "1.9-2.5x"** -- and whether a conclusion holds depends precisely on the
+band's ends, not the median.
 
-## 扰动口径(每个都注明出处;拍脑袋的明确标注「假设」)
+## Perturbation conventions (each with provenance; guesses are explicitly labeled "assumption")
 
-  α 曲线    x U[0.80, 1.20]   整条曲线乘同一因子(发间漂移 ~20% 实测;
-                              漂移是机台状态,整条曲线同涨同落)
-  β(慢边)  x U[0.90, 1.10]   同基准三发 ±9% 实测,取整为 ±10%
-  β(快边)  x U[0.995,1.005]  节点内档发间散布 <0.3% 实测(物理背书档)
-  splits    x U[0.95, 1.05]   实测区间 0.042-0.046
-  到达链    x U[0.90, 1.10]   「假设」:张量操作链,漂移应小于通信;±10% 保守
+  alpha curve     x U[0.80, 1.20]   the whole curve times one factor (run-to-run drift
+                                    ~20% measured; drift is machine state, the whole
+                                    curve rises and falls together)
+  beta (slow)     x U[0.90, 1.10]   same benchmark, three runs, ±9% measured, rounded to ±10%
+  beta (fast)     x U[0.995,1.005]  intra-node tier run-to-run spread <0.3% measured
+                                    (physics-endorsed tier)
+  splits          x U[0.95, 1.05]   measured range 0.042-0.046
+  arrival chain   x U[0.90, 1.10]   "assumption": a tensor-op chain should drift less
+                                    than communication; ±10% is conservative
 
-固定种子,任何人重跑得到逐位相同的带(`python -m sim.uncertainty`)。
+Fixed seed: anyone re-running gets bit-identical bands (`python -m sim.uncertainty`).
 
-## 判读纪律
+## Reading discipline
 
-带是**标定不确定度**的传播,不含模型结构误差(那由验证门管)。
-两者叠加时以更宽者为准。
+The band propagates **calibration uncertainty** only; it excludes model structure error
+(the validation gates own that). When the two are combined, the wider one governs.
 """
 from __future__ import annotations
 
@@ -34,20 +39,21 @@ from .core import MoEGeometry, one_hop_call, two_hop_call
 SEED = 20260825
 N_DRAWS = 400
 
-# (名字, 乘性扰动下界, 上界, 出处)
+# (name, multiplicative perturbation lower bound, upper bound, provenance)
 PERTURB = [
-    ("alpha", 0.80, 1.20, "发间漂移 ~20%(实测)"),
-    ("beta_slow", 0.90, 1.10, "三发 ±9%(实测,取整)"),
-    ("beta_fast", 0.995, 1.005, "发间散布 <0.3%(实测,物理背书档)"),
-    ("splits", 0.95, 1.05, "实测区间 0.042-0.046"),
-    ("chain", 0.90, 1.10, "假设:张量链漂移小于通信"),
+    ("alpha", 0.80, 1.20, "run-to-run drift ~20% (measured)"),
+    ("beta_slow", 0.90, 1.10, "three runs ±9% (measured, rounded)"),
+    ("beta_fast", 0.995, 1.005, "run-to-run spread <0.3% (measured, physics-endorsed tier)"),
+    ("splits", 0.95, 1.05, "measured range 0.042-0.046"),
+    ("chain", 0.90, 1.10, "assumption: tensor chain drifts less than communication"),
 ]
 
 
 def _perturbed(ratio: float, chain: float, f: dict):
-    """按一组因子建扰动后的合成集群。"""
+    """Build the perturbed synthetic cluster for one set of factors."""
     c = synthetic(ratio, chain_us_per_row=chain * f["chain"])
-    # α:整条曲线同因子;β:快/慢各自因子(见模块 docstring 的口径表)
+    # alpha: one factor for the whole curve; beta: separate fast/slow factors
+    # (see the convention table in the module docstring)
     for lvl, bf in ((c.fast, f["beta_fast"]), (c.slow, f["beta_slow"]),
                     (c.flat, f["beta_slow"])):
         lvl.alpha_pts = [(w, a * f["alpha"]) for w, a in lvl.alpha_pts]
@@ -66,7 +72,7 @@ def _speedup(cluster, q: int, tok: int, k_base: int = 6) -> float:
 
 def mc_band(ratio: float, chain: float, q: int = 3, tok: int = 4096,
             n: int = N_DRAWS, seed: int = SEED):
-    """返回 (p5, 中位, p95):一跳/两跳比在标定扰动下的分布分位。"""
+    """Return (p5, median, p95): quantiles of the one-hop/two-hop ratio under calibration perturbation."""
     rng = random.Random(seed)
     vals = []
     for _ in range(n):
@@ -78,7 +84,7 @@ def mc_band(ratio: float, chain: float, q: int = 3, tok: int = 4096,
 
 def breakeven_ratio(chain: float, q: int = 3, tok: int = 4096,
                     lo: float = 1.0, hi: float = 32.0) -> float:
-    """两跳开始赢(比值=1)的最小层级比;区间内不穿越返回边界值。"""
+    """Smallest hierarchy ratio at which two-hop starts winning (ratio=1); returns the boundary if there is no crossing inside the interval."""
     def s(r):
         return _speedup(synthetic(r, chain_us_per_row=chain), q, tok)
     if s(lo) >= 1.0:
@@ -97,16 +103,17 @@ def breakeven_ratio(chain: float, q: int = 3, tok: int = 4096,
 def heatmap(chain: float, q: int = 3,
             ratios=(1.03, 1.5, 2, 3, 4.5, 6, 8, 11, 16),
             toks=(512, 1024, 2048, 4096, 8192, 16384)):
-    """(ratios x toks) 的比值矩阵,给图用。行 = tok,列 = ratio。"""
+    """Ratio matrix over (ratios x toks), for figures. Rows = tok, columns = ratio."""
     return [[_speedup(synthetic(r, chain_us_per_row=chain), q, t)
              for r in ratios] for t in toks], list(ratios), list(toks)
 
 
 def geometry_grid(chain: float, tok: int = 4096):
-    """几何敏感性:breakeven 层级比随 (组数, R, k, M) 怎么走。
+    """Geometry sensitivity: how the breakeven hierarchy ratio moves with (n_groups, R, k, M).
 
-    (k, M) 显式枚举 —— 每行的实际 q = k/M 各不相同,标注按 (k, M) 走,
-    不冒充同一个 q(第一版把 k=4/8 行都标成 q=3,是错的)。
+    (k, M) is enumerated explicitly -- each row's actual q = k/M differs; labels follow
+    (k, M) and do not masquerade as one q (the first version labeled the k=4/8 rows as
+    q=3, which was wrong).
     """
     rows = []
     for ng in (8, 16, 32):
@@ -140,26 +147,28 @@ def geometry_grid(chain: float, tok: int = 4096):
 
 def main() -> None:
     from .sweep import CHAIN_SCENARIOS
-    print("蒙特卡洛误差带(%d 次抽样,种子 %d;扰动口径见模块 docstring)" %
+    print("Monte Carlo uncertainty bands (%d draws, seed %d; perturbation conventions in the module docstring)" %
           (N_DRAWS, SEED))
-    print("几何:16 组 x 8,k=6/M=2(q=3),T=4096;值 = 一跳/两跳(>1 两跳快)")
+    print("Geometry: 16 groups x 8, k=6/M=2 (q=3), T=4096; value = one-hop/two-hop (>1 = two-hop faster)")
     ratios = [1.03, 2.0, 3.2, 4.5, 8.0, 15.7]
     for name, chain in CHAIN_SCENARIOS:
         print("\n-- %s --" % name)
-        print("%-10s %10s %18s" % ("层级比", "中位", "[p5, p95]"))
+        print("%-10s %10s %18s" % ("ratio", "median", "[p5, p95]"))
         for r in ratios:
             p5, med, p95 = mc_band(r, chain)
             print("%-10.2f %10.2f       [%.2f, %.2f]" % (r, med, p5, p95))
-    print("\nbreakeven 层级比(比值=1 的最小层级比,q=3,T=4096):")
+    print("\nBreakeven hierarchy ratio (smallest hierarchy ratio with ratio=1, q=3, T=4096):")
     for name, chain in CHAIN_SCENARIOS:
         print("  %-24s %.2f" % (name, breakeven_ratio(chain)))
-    print("\n两条鲁棒性锚(结论稳不稳看带的两端):")
-    p5, _, p95 = mc_band(1.03, CHAIN_SCENARIOS[2][1])   # 零开销 + 扁平
-    print("  扁平列最有利情形(零实现开销)p95 = %.2f -> %s" %
-          (p95, "≤1,判负结论对标定误差鲁棒" if p95 <= 1.0 else "!! 越线,写结论要收敛"))
-    p5b, _, _ = mc_band(8.0, CHAIN_SCENARIOS[0][1])     # PyTorch 链 + 8x
-    print("  8x 列最不利情形(PyTorch 链)p5 = %.2f -> %s" %
-          (p5b, "仍 >1,方向结论鲁棒" if p5b > 1.0 else "<1:8x 列的赢面依赖实现档,只报融合档以上"))
+    print("\nTwo robustness anchors (whether a conclusion holds depends on the band's ends):")
+    p5, _, p95 = mc_band(1.03, CHAIN_SCENARIOS[2][1])   # zero overhead + flat
+    print("  flat column, most favorable case (zero implementation overhead) p95 = %.2f -> %s" %
+          (p95, "≤1, the negative verdict is robust to calibration error" if p95 <= 1.0
+           else "!! crosses the line -- tighten the written conclusion"))
+    p5b, _, _ = mc_band(8.0, CHAIN_SCENARIOS[0][1])     # PyTorch chain + 8x
+    print("  8x column, least favorable case (PyTorch chain) p5 = %.2f -> %s" %
+          (p5b, "still >1, the direction conclusion is robust" if p5b > 1.0
+           else "<1: the 8x column's win depends on the implementation tier; report the fused tier and above only"))
 
 
 if __name__ == "__main__":

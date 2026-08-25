@@ -1,9 +1,10 @@
 """The four ablation modes must produce DISTINGUISHABLE routings, and unknown modes must crash.
 
 Why this file exists (2026-08-11 repo audit, finding 2.8): with `mode` hard-wired to one
-value inside `t_route` -- the shape of the 某上游分支的路由参数静默丢弃事故 incident, where the vendor
-branch silently dropped the group-routing args and 48 arms of "four modes, no difference"
-nearly shipped as a false-positive G2 (内部工程记录) -- the ENTIRE test suite stayed
+value inside `t_route` -- the shape of the upstream-branch silent routing-arg-drop
+incident, where the vendor branch silently dropped the group-routing args and 48 arms of
+"four modes, no difference" nearly shipped as a false-positive G2 (internal engineering
+records) -- the ENTIRE test suite stayed
 green: G1 asserted only "k distinct experts per token", G2/G3 used full only, and the
 backend tests compare two backends within one mode. Nothing asserted the modes differ.
 
@@ -71,7 +72,7 @@ def test_global_topk_is_actually_unconstrained(routed):
     s = spans(routed["global_topk"])
     assert int(s.max()) > M, (
         f"global_topk never exceeded M={M} groups over {T} tokens -- the four modes have "
-        f"collapsed (某上游分支 incident signature, 内部工程记录:)")
+        f"collapsed (upstream-branch incident signature, internal engineering records)")
 
 
 def test_modes_differ_pairwise(routed):

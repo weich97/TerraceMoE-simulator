@@ -1,27 +1,37 @@
 # -*- coding: utf-8 -*-
-"""并包解包不得与缓冲共享存储(2026-08-21 判决床 rank61 崩溃的回归测试)。
+"""Unpacked planes must not share storage with the pack buffer (regression test for
+the 2026-08-21 verdict-testbed rank61 crash).
 
-事故经过:
-  判决床 pack-on 臂两发都在 iter 30 附近死掉,报
+What happened:
+  Both shots of the verdict testbed's pack-on arm died around iter 30 with
       RuntimeError: The tensor has a non-zero number of elements,
                     but its data is not allocated yet.
       at terrace/ta2a_dispatch.py `owner = slot_idx // epr`
-  另外 15 台在集合通信上等这个已经死掉的 rank,表现成"整框挂死 40 分钟"。
+  The other 15 machines sat in a collective waiting for the already-dead rank,
+  which presented as "the whole frame hung for 40 minutes".
 
-根因:
-  `hopa_unpack` 用 `.contiguous()` 连续化列切片。PyTorch 判定连续性时,**dim0 尺寸
-  为 1 的那一维 stride 被忽略** —— 于是 `buf[:, a:b]` 在 R==1 时被判为已连续,
-  `.contiguous()` 原样交回视图。调用方紧接着 `_rbuf.untyped_storage().resize_(0)`
-  还内存,三个平面当场悬空,直到十几个算子之后第一次真读才炸。
+Root cause:
+  `hopa_unpack` used `.contiguous()` to make the column slices contiguous. When
+  PyTorch checks contiguity, **the stride of any dimension of size 1 is ignored** --
+  so at R==1, `buf[:, a:b]` is judged already contiguous and `.contiguous()` hands
+  the view back unchanged. The caller then runs
+  `_rbuf.untyped_storage().resize_(0)` to return the memory, all three planes
+  dangle on the spot, and nothing blows up until the first real read a dozen
+  operators later.
 
-  为什么对齐床(4 节点)没撞上、判决床(16 节点)撞上了:行被切成 16 份而不是 4 份,
-  加上 load_cv 随训练从 1.0 爬到 1.4,某个 rank 收到恰好 1 行的概率从可忽略变成会发生。
-  为什么 iter 30 而不是 iter 1:路由要先专门化,分布才够偏。
+  Why the alignment bed (4 nodes) never hit it and the verdict testbed (16 nodes)
+  did: rows get split 16 ways instead of 4, and with load_cv climbing from 1.0 to
+  1.4 over training, the probability of some rank receiving exactly 1 row goes from
+  negligible to bound-to-happen.
+  Why iter 30 and not iter 1: routing has to specialize first before the
+  distribution gets skewed enough.
 
-修法:`ta2a_pack._own()` 用 `clone(memory_format=contiguous_format)`,**永远**新存储;
-      调用点还内存前再加一道 `assert_not_aliased` 绊线。
+The fix: `ta2a_pack._own()` uses `clone(memory_format=contiguous_format)`, which
+      **always** allocates new storage; the call site adds an `assert_not_aliased`
+      tripwire before returning the memory.
 
-本测试是纯 CPU 的形状级复现,不需要 NPU,也不需要分布式。
+This test is a pure-CPU shape-level reproduction; it needs no NPU and no
+distributed setup.
 """
 import pytest
 import torch
@@ -29,11 +39,13 @@ import torch
 from terrace import ta2a_pack as pk
 
 
-# 判决床几何:H=2048, quota=3(k=6 / M=2), slots=24(384 专家 / 128 EP / 8 rpn)
+# Verdict-testbed geometry: H=2048, quota=3 (k=6 / M=2), slots=24 (384 experts /
+# 128 EP / 8 rpn)
 JUDGMENT = dict(hidden=2048, quota=3, slots=24)
 
-# R=1 是危险形状(dim0 尺寸 1 -> stride 被忽略 -> 切片被判连续);
-# R=0 与 R>=2 也一并钉住,免得将来有人"只修 1"。
+# R=1 is the dangerous shape (dim0 size 1 -> stride ignored -> slice judged
+# contiguous); R=0 and R>=2 are pinned down too, so nobody ever "fixes only the
+# 1 case".
 ROW_COUNTS = [0, 1, 2, 3, 17]
 
 
@@ -42,7 +54,8 @@ def _storage_ptr(t):
 
 
 def _aliases(plane, buf):
-    """plane 是否与 buf 共享存储。空张量不算(它没有可悬空的数据)。"""
+    """Whether plane shares storage with buf. Empty tensors do not count (they have
+    no data that could dangle)."""
     return plane.numel() > 0 and _storage_ptr(plane) == _storage_ptr(buf)
 
 
@@ -59,23 +72,27 @@ def test_hopa_unpack_never_aliases_buffer(rows, dtype):
 
     for name, plane in (("payload", rx), ("gate", rgate), ("id", rmask)):
         assert not _aliases(plane, buf), (
-            "rows=%d dtype=%s:%s 面仍与并包缓冲共享存储 —— "
-            "调用方 resize(0) 后它会悬空" % (rows, dtype, name)
+            "rows=%d dtype=%s: %s plane still shares storage with the pack "
+            "buffer -- it will dangle after the caller's resize(0)"
+            % (rows, dtype, name)
         )
 
 
 @pytest.mark.parametrize("rows", ROW_COUNTS)
 def test_hopa_unpack_never_aliases_bitmask_format(rows):
-    """位掩码线格式(id 面是 1-D)走的是另一条切片,同样不许别名。"""
+    """The bitmask wire format (1-D id plane) takes a different slice path; aliasing
+    is just as forbidden there."""
     H, slots = JUDGMENT["hidden"], JUDGMENT["slots"]
     payload = torch.zeros(rows, H, dtype=torch.bfloat16)
     gate = torch.zeros(rows, slots, dtype=torch.bfloat16)
     ids = torch.zeros(rows, dtype=torch.int64)
 
     buf, lay = pk.hopa_pack(payload, gate, ids)
-    assert lay.id_1d, "这一组本该走 1-D id 面"
+    assert lay.id_1d, "this group should take the 1-D id plane"
     for plane in pk.hopa_unpack(buf, lay):
-        assert not _aliases(plane, buf), "rows=%d:位掩码格式下解包平面别名了缓冲" % rows
+        assert not _aliases(plane, buf), (
+            "rows=%d: unpacked plane aliases the buffer under the bitmask format"
+            % rows)
 
 
 @pytest.mark.parametrize("pairs", ROW_COUNTS)
@@ -84,14 +101,18 @@ def test_hopb_unpack_never_aliases_buffer(pairs):
     gate = torch.zeros(pairs, dtype=torch.bfloat16)
     buf = pk.hopb_pack_meta(slot, gate)
     for plane in pk.hopb_unpack_meta(buf, torch.bfloat16):
-        assert not _aliases(plane, buf), "pairs=%d:Hop B 解包平面别名了缓冲" % pairs
+        assert not _aliases(plane, buf), (
+            "pairs=%d: Hop B unpacked plane aliases the buffer" % pairs)
 
 
 @pytest.mark.parametrize("rows", ROW_COUNTS)
 def test_planes_survive_freeing_the_buffer(rows):
-    """端到端复现事故形状:解包 -> 把缓冲的存储收成 0 -> 三个平面仍可读且值正确。
+    """End-to-end reproduction of the incident shape: unpack -> shrink the buffer's
+    storage to 0 -> all three planes still readable with correct values.
 
-    这一条才是真正对着事故写的:上面几条只查指针,这条查"还内存之后还能不能用"。
+    This is the one actually written against the incident: the tests above only
+    check pointers; this one checks "does it still work after the memory is
+    returned".
     """
     H, q = JUDGMENT["hidden"], JUDGMENT["quota"]
     payload = torch.arange(rows * H, dtype=torch.float32).reshape(rows, H).to(torch.bfloat16)
@@ -102,45 +123,49 @@ def test_planes_survive_freeing_the_buffer(rows):
     rx, rgate, rmask = pk.hopa_unpack(buf, lay)
     pk.assert_not_aliased(buf, rx, rgate, rmask)
 
-    buf.untyped_storage().resize_(0)          # 事故现场的那一行
+    buf.untyped_storage().resize_(0)          # the exact line from the incident
 
-    assert torch.equal(rx, payload), "还内存后载荷面读出来不对"
-    assert torch.equal(rgate, gate), "还内存后 gate 面读出来不对"
-    assert torch.equal(rmask, ids), "还内存后 id 面读出来不对"
-    # 下游第一次真用:事故里炸的就是这一句
+    assert torch.equal(rx, payload), "payload plane reads back wrong after the memory is returned"
+    assert torch.equal(rgate, gate), "gate plane reads back wrong after the memory is returned"
+    assert torch.equal(rmask, ids), "id plane reads back wrong after the memory is returned"
+    # first real downstream use: this is the exact statement that blew up in the incident
     _ = rmask // 3
 
 
 def test_assert_not_aliased_actually_catches_an_alias():
-    """绊线自检:手工造一个别名平面,assert_not_aliased 必须抓到。
+    """Tripwire self-check: hand-build an aliased plane; assert_not_aliased must
+    catch it.
 
-    没有这条,绊线一旦写错(比如把 numel 判反)就会变成永远不响的哑巴 ——
-    这正是 08-22 那天 idle_watch 的死法。
+    Without this, a mis-written tripwire (say, the numel check inverted) becomes a
+    mute that never fires -- exactly how idle_watch died on 08-22.
     """
     buf = torch.zeros(4, 8, dtype=torch.int64)
-    aliased = buf[:, :2]                       # 明确的视图,不做拷贝
-    assert _aliases(aliased, buf), "构造的别名平面本身就没别名,测试无效"
-    with pytest.raises(RuntimeError, match="共享存储"):
+    aliased = buf[:, :2]                       # an explicit view, no copy
+    assert _aliases(aliased, buf), \
+        "the hand-built alias plane does not actually alias; the test is void"
+    with pytest.raises(RuntimeError, match="shared storage"):
         pk.assert_not_aliased(buf, aliased)
-    # 真拷贝必须放行
+    # a real copy must pass
     pk.assert_not_aliased(buf, aliased.clone())
 
 
 def test_contiguous_would_have_been_a_noop_at_one_row():
-    """把"为什么 .contiguous() 不够"钉成可执行的事实。
+    """Pin "why .contiguous() is not enough" down as an executable fact.
 
-    如果哪天 PyTorch 改了连续性判定、或有人把 _own 改回 .contiguous(),
-    这条会先炸,提醒来看注释里的论证还成不成立。
+    If PyTorch ever changes its contiguity check, or someone reverts _own to
+    .contiguous(), this test blows up first, prompting a re-check of whether the
+    argument in the comments still holds.
     """
     buf = torch.zeros(1, 516, dtype=torch.int64)
     sliced = buf[:, :3]
     assert sliced.is_contiguous(), (
-        "R==1 的列切片不再被判为连续 —— _own 的必要性论证需要重新核实"
+        "a column slice at R==1 is no longer judged contiguous -- the necessity "
+        "argument for _own needs re-verification"
     )
     assert sliced.contiguous().untyped_storage().data_ptr() == buf.untyped_storage().data_ptr(), (
-        ".contiguous() 不再原样交回视图 —— 同上"
+        ".contiguous() no longer hands the view back unchanged -- same as above"
     )
     assert sliced.clone().untyped_storage().data_ptr() != buf.untyped_storage().data_ptr()
 
     two = torch.zeros(2, 516, dtype=torch.int64)[:, :3]
-    assert not two.is_contiguous(), "R>=2 本该是非连续的(对照组)"
+    assert not two.is_contiguous(), "R>=2 should be non-contiguous (the control group)"

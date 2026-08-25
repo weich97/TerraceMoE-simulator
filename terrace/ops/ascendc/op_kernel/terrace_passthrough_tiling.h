@@ -1,31 +1,34 @@
 /**
- * terrace_passthrough -- tiling 数据定义(工程链路样板)。
+ * terrace_passthrough -- tiling data definition (engineering-pipeline template).
  *
- * **放在 op_kernel/ 而不是 op_host/**:CANN 9.0.0 的 ASC 构建体系里,tiling 结构体
- * 是 host 与 kernel 的**共享普通 C 结构体**,由两侧同时 include —— host 侧
- * `context->GetTilingData<T>()` 直接往 tiling buffer 里填,kernel 侧
- * `REGISTER_TILING_DEFAULT(T)` + `GET_TILING_DATA` 反序列化回同一个 T。
- * msopgen 生成的骨架就把它放在 op_kernel/,host stub 用 "../op_kernel/xxx_tiling.h"
- * 反向 include。本文件与 op_host/、op_kernel/ 的同名 stub 一一对应。
+ * **Lives in op_kernel/, not op_host/**: in the CANN 9.0.0 ASC build system, the tiling
+ * struct is a **plain C struct shared** by host and kernel, included from both sides --
+ * the host side fills the tiling buffer directly via `context->GetTilingData<T>()`, and
+ * the kernel side deserializes back into the same T via `REGISTER_TILING_DEFAULT(T)` +
+ * `GET_TILING_DATA`. The msopgen-generated skeleton puts it in op_kernel/, and the host
+ * stub includes it backwards as "../op_kernel/xxx_tiling.h". This file corresponds
+ * one-to-one with the same-named stubs in op_host/ and op_kernel/.
  *
- * 旧写法(CANN 8.x 的 BEGIN_TILING_DATA_DEF / TILING_DATA_FIELD_DEF /
- * REGISTER_TILING_DATA_CLASS,头放 op_host/)在 9.0.0 上**编不出 kernel**:
- * kernel 侧拿不到结构体定义,GET_TILING_DATA 展开即失败,而失败日志被 binary
- * 子构建吞掉,主日志只剩下游的 "The Target path not found: .../binary/ascend910_93"
- * —— 见 本文件头的踩坑记录 坑 4。
+ * The old style (CANN 8.x's BEGIN_TILING_DATA_DEF / TILING_DATA_FIELD_DEF /
+ * REGISTER_TILING_DATA_CLASS with the header in op_host/) **fails to build the kernel**
+ * on 9.0.0: the kernel side never sees the struct definition, GET_TILING_DATA fails right
+ * at expansion, the failure log gets swallowed by the binary sub-build, and the main log
+ * only shows the downstream "The Target path not found: .../binary/ascend910_93"
+ * -- see pitfall 4 of the pitfall notes in this file's header.
  *
- * 字段随 kernel 的均匀切块模型走:总元素数 + 每核 tile 数。
+ * Fields follow the kernel's uniform partition model: total element count + tiles per core.
  */
 #ifndef TERRACE_PASSTHROUGH_TILING_H
 #define TERRACE_PASSTHROUGH_TILING_H
 
 #include <cstdint>
 
-// 全局命名空间(与 msopgen 骨架一致):host 侧在 namespace optiling 里按非限定名
-// 引用即可命中;放进 optiling 会让 kernel 侧(不引 optiling)找不到。
+// Global namespace (matching the msopgen skeleton): the host side, inside namespace
+// optiling, hits it via unqualified lookup; putting it inside optiling would make it
+// invisible to the kernel side (which never opens optiling).
 struct TerracePassthroughTilingData {
-    uint32_t totalLength;   // 输入张量总元素数
-    uint32_t tileNum;       // 每核 tile 数(double buffer 前)
+    uint32_t totalLength;   // total element count of the input tensor
+    uint32_t tileNum;       // tiles per core (before double buffering)
 };
 
 #endif  // TERRACE_PASSTHROUGH_TILING_H

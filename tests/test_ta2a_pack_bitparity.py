@@ -1,42 +1,59 @@
-"""A1/A2 集合通信并包(2026-08-21)的位级契约、条数账与活路径证据。
+"""Bit-level contract, call-count ledger, and live-path evidence for the A1/A2
+collective packing (2026-08-21).
 
-Why this file exists(内部设计记录(未随仓发布) 的 A1/A2):w128/w8 的 a2a
-曲线拆成 `α + β` 后,α₁₂₈ = 0.45 ms、α₈ = 0.058 ms,而 β₈ ≈ β₁₂₈ ≈ 110 GB/s ——
-**字节几乎不要钱、条数很贵**。一次 dispatch 原走 8 条集合通信(inter 4 + intra 4),
-厂商 alltoall_seq 侧只有约 3 条。并包把共用 splits 的路合成一条:Hop A 4 -> 2
-([id‖payload‖gate])、Hop B 4 -> 3([slot‖gate]),拆半接缝前向 10 -> 7(combine 不动)。
-**这是纯字节重排**,不动任何归约序、配对序、排序键、dtype 与圆整点,所以判据只能是
-`torch.equal`,不设容差。
+Why this file exists (A1/A2 of the internal design records, not shipped with the
+repo): after splitting the w128/w8 a2a curves into `α + β`, α₁₂₈ = 0.45 ms,
+α₈ = 0.058 ms, while β₈ ≈ β₁₂₈ ≈ 110 GB/s —
+**bytes are nearly free, calls are expensive**. One dispatch originally took 8
+collectives (inter 4 + intra 4); the vendor's alltoall_seq side has only about 3.
+Packing merges lanes that share splits into a single call: Hop A 4 -> 2
+([id‖payload‖gate]), Hop B 4 -> 3 ([slot‖gate]), split-half seam forward 10 -> 7
+(combine untouched). **This is pure byte rearrangement** — it moves no reduction
+order, pairing order, sort key, dtype, or rounding point — so the only admissible
+criterion is `torch.equal`, with no tolerance.
 
-Hop B 的载荷面 exp_rx **有意不并**:并包省 α 但每并进一个大平面就多付两趟它自己的
-HBM 拷贝,判决床上是 +0.317 ms 换 0.116 ms = 净亏 0.20 ms(算式见 terrace/ta2a_pack.py
-的 Hop B 一节)—— 与 2026-08-01「torch.cat 门控并包」翻车同一条物理。
+Hop B's payload plane exp_rx is **deliberately not packed**: packing saves α, but
+every large plane packed in pays two extra HBM copies of itself; on the verdict
+testbed that is +0.317 ms to save 0.116 ms = a net loss of 0.20 ms (arithmetic in
+the Hop B section of terrace/ta2a_pack.py) — the same physics as the 2026-08-01
+"torch.cat gate packing" failure.
 
-四层锁:
+Four locks:
 
-1. **单元层**(无进程组):打包/解包对着**原张量**逐位往返 —— Hop A(int64 容器,
-   id 面在行首;id_w=1 的位掩码与 id_w=quota 的槽号表两支)与 Hop B(int64 容器)
-   各一套,多几何 × fp32/bf16;pad 区清零、行宽公式、int64 全宽不截断、
-   **splits 就是行数不缩放**、dtype 失配 fail-loud。
-2. **接缝层**(gloo,world 4 / rpn 2,2 节点真实跨节点跳):**同进程 A/B** —— 并包臂
-   与未并包臂(monkeypatch `pack_enabled`)在同一趟里跑同一批输入,legacy 3 参接缝与
-   overlap 6 参接缝的前向、四路叶子梯度、以及厂商手工重放真正要读的四个 detach 叶
-   `.grad` 全部逐位相等。fp32 与床口径(bf16 载荷/权重 + fp32 router probs)双档,
-   quota 快路径(gm=M)与通用支路(gm=None)双支。
-3. **厂商契约层**:`st.send_l / st.recv_l`(交给 `disp.input_splits/output_splits`
-   的就是这两份)在两臂**逐项相等且仍是行数** —— 并包把线上张量按 `F/gw` 缩放的
-   是**内部**的一份拷贝,厂商那两次手工重放(rx_d.grad / rgate_d.grad)因此照跑不误,
-   仍各是**一次** a2a。测试里的重放严格照厂商顺序逐步复刻(与
-   tests/test_ta2a_overlap_seam.py 同序),两次 `.backward()` 进 permute2 段都必须活
-   —— Hop B 并包若焊成一枚融合节点,第二次会当场炸(内部工程记录 2026-08-20)。
-4. **条数与活路径**:并包臂(默认 small 形态)legacy 接缝 fwd/bwd = 8/6、
-   未并包臂 = 10/6;overlap 接缝 dispatch 半边 6 vs 8。并且逐条记录
-   `hopa_pack / hopa_pack_small / hopb_pack_meta` 的调用次数
-   —— 等价断言对「闸门从未打开」是盲的(内部工程记录),没有活路径证据,前三层全是空转。
-   (C1 线格式本身有没有静默回退,由 tests/test_ta2a_quota_wire_bitparity.py 把守;
-   A1′ 之后它的观测点也挪到了 `hopa_pack` 的入参上。)
+1. **Unit layer** (no process group): pack/unpack round-trips bit-for-bit against
+   the **original tensors** — one set for Hop A (int64 container, id plane at the
+   row head; two branches, the id_w=1 bitmask and the id_w=quota slot-index
+   table) and one for Hop B (int64 container), multiple geometries x fp32/bf16;
+   pad region zeroed, row-width formula, int64 full width never truncated,
+   **splits are row counts and do not scale**, dtype mismatch fails loud.
+2. **Seam layer** (gloo, world 4 / rpn 2, 2 nodes with a real cross-node hop):
+   **same-process A/B** — the packed arm and the unpacked arm (monkeypatch
+   `pack_enabled`) run the same batch of inputs in the same pass; the forwards of
+   the legacy 3-arg seam and the overlap 6-arg seam, the four leaf gradients, and
+   the `.grad` of the four detached leaves the vendor's manual replay actually
+   reads are all bitwise equal. Two dtype tiers — fp32 and the testbed config
+   (bf16 payload/weights + fp32 router probs) — and two branches, the quota fast
+   path (gm=M) and the generic branch (gm=None).
+3. **Vendor contract layer**: `st.send_l / st.recv_l` (exactly what gets handed
+   to `disp.input_splits/output_splits`) are **item-for-item equal across the two
+   arms and still row counts** — what packing scales by `F/gw` is an **internal**
+   copy of the wire tensor, so the vendor's two manual replays (rx_d.grad /
+   rgate_d.grad) run unchanged, each still **one** a2a. The replay in this test
+   reproduces the vendor's order step by step (same order as
+   tests/test_ta2a_overlap_seam.py); both `.backward()` calls into the permute2
+   segment must stay live — if Hop B packing were welded into a single fused
+   node, the second call would blow up on the spot (internal engineering
+   records, 2026-08-20).
+4. **Call counts and live path**: packed arm (default small form) legacy seam
+   fwd/bwd = 8/6, unpacked arm = 10/6; overlap seam dispatch half 6 vs 8. On top
+   of that, the call counts of `hopa_pack / hopa_pack_small / hopb_pack_meta` are
+   recorded one by one — equivalence assertions are blind to "the gate never
+   opened" (internal engineering records); without live-path evidence the first
+   three layers are vacuous. (Whether the C1 wire format itself silently falls
+   back is guarded by tests/test_ta2a_quota_wire_bitparity.py; since A1′ its
+   observation point has also moved to the input arguments of `hopa_pack`.)
 
-gloo / CPU,world 4、rpn 2。
+gloo / CPU, world 4, rpn 2.
 """
 from __future__ import annotations
 
@@ -55,25 +72,31 @@ import terrace.ta2a_pack as pk  # noqa: E402
 
 WORLD, RPN, T, K, M, E, H, D = 4, 2, 8, 4, 2, 8, 6, 4
 
-# 并包前 / 后的拆半接缝条数(黄金值同步钉在 test_ta2a_gate_at_arrival.py)。
-# **2026-08-22:默认形态由 full 改为 small,这三个数随之从 7/6/5 变成 8/6/6。**
-# 不是回归 —— full 形态在判决床实测净亏 2.05 ms/次,少那一条集合通信是拿
-# 载荷的两趟 HBM 拷贝换的,换亏了(内部实测记录)。
+# Split-half seam call counts before / after packing (golden values pinned in
+# sync with test_ta2a_gate_at_arrival.py).
+# **2026-08-22: the default form changed from full to small, and these three
+# numbers moved from 7/6/5 to 8/6/6 with it.**
+# Not a regression — the full form measured a net loss of 2.05 ms/pass on the
+# verdict testbed: the one collective it saved was bought with two HBM copies of
+# the payload, a losing trade (internal measurement records).
 PACKED_FWD, PACKED_BWD = 8, 6
 PLAIN_FWD, PLAIN_BWD = 10, 6
-# overlap 接缝 dispatch 半边(permute_overlap)的条数,small 形态:
-#   inter 3 条 = counts + payload + [id‖gate]
-#   intra 3 条 = counts + exp_rx + [slot‖gate]
-# 未并包时 4 + 4 = 8;full 形态是 2 + 3 = 5(要跑它得显式 TERRACE_TA2A_PACK=full)。
+# Overlap-seam dispatch half (permute_overlap) call counts, small form:
+#   inter 3 = counts + payload + [id‖gate]
+#   intra 3 = counts + exp_rx + [slot‖gate]
+# Unpacked is 4 + 4 = 8; the full form is 2 + 3 = 5 (running it requires an
+# explicit TERRACE_TA2A_PACK=full).
 PACKED_DISP, PLAIN_DISP = 6, 8
 
 
 # ======================================================================================
-# 1. 单元层:打包/解包 == 原三张量,逐位
+# 1. Unit layer: pack/unpack == the original three tensors, bitwise
 # ======================================================================================
 
-# (n, hidden, gate_w, id_w):id_w=1 是通用臂的位掩码(1 维),>1 是 C1 槽号表。
-# 覆盖 pad 非零/为零、gate 宽 1、宽 gate 面(通用臂 gw=slots)、判决床宽度。
+# (n, hidden, gate_w, id_w): id_w=1 is the generic arm's bitmask (1-D); >1 is the
+# C1 slot-index table.
+# Covers nonzero/zero pad, gate width 1, a wide gate plane (generic arm
+# gw=slots), and verdict-testbed widths.
 HOPA_GEOMS = [(5, 6, 2, 2), (5, 6, 4, 1), (1, 7, 3, 3), (17, 2048, 3, 3),
               (4, 5, 1, 1), (3, 24, 24, 1), (9, 2048, 24, 1)]
 
@@ -82,7 +105,8 @@ HOPA_GEOMS = [(5, 6, 2, 2), (5, 6, 4, 1), (1, 7, 3, 3), (17, 2048, 3, 3),
                          ids=lambda g: f"n{g[0]}h{g[1]}g{g[2]}i{g[3]}")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_hopa_pack_roundtrip_is_bitwise(geom, dtype):
-    """Hop A:id + payload + gate -> [n, W] int64 -> 回来,三块逐位、dtype/形状不变。"""
+    """Hop A: id + payload + gate -> [n, W] int64 -> back; all three blocks
+    bitwise, dtype/shape unchanged."""
     n, hidden, gate_w, id_w = geom
     g = torch.Generator().manual_seed(1000 + n * 31 + hidden + id_w)
     payload = torch.randn(n, hidden, generator=g).to(dtype)
@@ -96,12 +120,12 @@ def test_hopa_pack_roundtrip_is_bitwise(geom, dtype):
     assert buf.shape == (n, lay.words) and buf.dtype == torch.int64
     assert buf.is_contiguous()
     assert lay.id_w == id_w and lay.id_1d is (id_w == 1 and ids.dim() == 1)
-    # 行宽:id 面 + 刚好装下 (H + gw) 个浮点的 word 数,冗余 < 1 word
+    # Row width: id plane + just enough words to hold (H + gw) floats; slack < 1 word
     assert (lay.words - id_w) * per_word >= hidden + gate_w
     assert (lay.words - id_w - 1) * per_word < hidden + gate_w
-    # id 面在行首 => 浮点区起始字节恒为 8 的倍数
+    # id plane at the row head => the float region always starts on an 8-byte boundary
     assert (id_w * 8) % 8 == 0
-    # pad 区显式清零(收侧永不读)
+    # Pad region explicitly zeroed (the receive side never reads it)
     tail = id_w * per_word + hidden + gate_w
     if tail < lay.words * per_word:
         pad = buf.view(dtype)[:, tail:]
@@ -112,11 +136,13 @@ def test_hopa_pack_roundtrip_is_bitwise(geom, dtype):
     assert torch.equal(got_g, gate) and got_g.dtype == gate.dtype
     assert torch.equal(got_i, ids) and got_i.shape == ids.shape
     assert got_p.is_contiguous() and got_g.is_contiguous() and got_i.is_contiguous(), (
-        "解包必须回连续张量:2026-08-01 的 torch.cat 并包正是被下游吃非连续切片拖死的")
+        "unpack must return contiguous tensors: the 2026-08-01 torch.cat packing "
+        "was dragged down precisely by downstream consuming non-contiguous slices")
 
 
 def test_hopa_id_plane_survives_full_int64_range():
-    """位掩码是 int64 的**全宽**值(slots 可到 63 位),不许被任何窄化路径截断。"""
+    """The bitmask is a **full-width** int64 value (slots can reach 63 bits); no
+    narrowing path may truncate it."""
     ids = torch.tensor([0, 1, (1 << 62) + 12345, -1, (1 << 63) - 1],
                        dtype=torch.int64)
     payload = torch.randn(5, 6).to(torch.bfloat16)
@@ -129,10 +155,13 @@ def test_hopa_id_plane_survives_full_int64_range():
 @pytest.mark.parametrize("geom", HOPA_GEOMS,
                          ids=lambda g: f"n{g[0]}h{g[1]}g{g[2]}i{g[3]}")
 def test_hopa_splits_are_plain_row_counts(geom):
-    """线上张量 dim 0 就是行数 —— splits **不缩放**,每一段恰好是原来那几行。
+    """dim 0 of the wire tensor is the row count — splits **do not scale**; each
+    segment is exactly the original rows.
 
-    这是厂商契约不动的直接理由:`st.send_l / st.recv_l`(= disp.input_splits /
-    output_splits)与并包前逐项相同,厂商 backward 的手工重放不需要知道并包存在。
+    This is the direct reason the vendor contract stays untouched:
+    `st.send_l / st.recv_l` (= disp.input_splits / output_splits) are
+    item-for-item identical to pre-packing, so the vendor's manual backward
+    replay does not need to know packing exists.
     """
     n, hidden, gate_w, id_w = geom
     payload = torch.randn(n, hidden)
@@ -140,11 +169,11 @@ def test_hopa_splits_are_plain_row_counts(geom):
     ids = (torch.zeros(n, dtype=torch.int64) if id_w == 1
            else torch.zeros(n, id_w, dtype=torch.int64))
     buf, _lay = pk.hopa_pack(payload, gate, ids)
-    assert buf.shape[0] == n, "dim 0 必须是行数"
+    assert buf.shape[0] == n, "dim 0 must be the row count"
     row_splits = [n // 3, n - n // 3 - n // 4, n // 4]
     assert sum(row_splits) == n
     off = 0
-    for sz in row_splits:                       # 段的所有权划分与并包前逐行一致
+    for sz in row_splits:                       # segment ownership matches pre-packing, row for row
         assert torch.equal(buf[off:off + sz], buf.narrow(0, off, sz))
         off += sz
 
@@ -152,14 +181,15 @@ def test_hopa_splits_are_plain_row_counts(geom):
 @pytest.mark.parametrize("P", [1, 5, 13, 4096])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_hopb_meta_pack_roundtrip_is_bitwise(P, dtype):
-    """Hop B:槽号(int64)+ gate -> int64 容器 -> 回来,两块逐位。"""
+    """Hop B: slot ids (int64) + gate -> int64 container -> back; both blocks bitwise."""
     g = torch.Generator().manual_seed(2000 + P * 17)
     slot = torch.randint(0, 24, (P,), generator=g, dtype=torch.int64)
     gate = torch.rand(P, generator=g).to(dtype)
 
     buf = pk.hopb_pack_meta(slot, gate)
     assert buf.shape == (P, 2) and buf.dtype == torch.int64 and buf.is_contiguous()
-    # 槽号面在行首 + 行宽以 int64 word 计 => 每行起始与浮点区起始都在 8 字节边界上
+    # Slot plane at the row head + row width counted in int64 words => every row
+    # start and the float-region start sit on an 8-byte boundary
     assert pk.hopb_meta_words() == 2
 
     got_s, got_g = pk.hopb_unpack_meta(buf, dtype)
@@ -169,7 +199,8 @@ def test_hopb_meta_pack_roundtrip_is_bitwise(P, dtype):
 
 
 def test_hopb_meta_pack_pad_is_zeroed():
-    """pad 区显式清零:收侧永不读它,但也不该把未初始化位送上线。"""
+    """Pad region explicitly zeroed: the receive side never reads it, but
+    uninitialized bits must not go on the wire either."""
     slot = torch.arange(7, dtype=torch.int64)
     gate = torch.rand(7).to(torch.bfloat16)
     buf = pk.hopb_pack_meta(slot, gate)
@@ -178,28 +209,30 @@ def test_hopb_meta_pack_pad_is_zeroed():
 
 
 def test_pack_dtype_mismatch_is_loud():
-    """dtype / 形状失配必须当场死 —— 与旧稀疏平面在 index_put 处同一失效形态
-    (一次内部提交 的 fp32 gate 平面漂移正是从这类静默处进场的)。"""
+    """dtype / shape mismatch must die on the spot — the same failure mode as the
+    old sparse plane at index_put (an internal commit's fp32 gate-plane drift got
+    in through exactly this kind of silent spot)."""
     ids3 = torch.zeros(3, dtype=torch.int64)
-    with pytest.raises(RuntimeError):           # Hop A:gate 与 payload 不同 dtype
+    with pytest.raises(RuntimeError):           # Hop A: gate dtype differs from payload
         pk.hopa_pack(torch.randn(3, 4).to(torch.bfloat16), torch.rand(3, 2), ids3)
-    with pytest.raises(RuntimeError):           # Hop A:id 面必须 int64
+    with pytest.raises(RuntimeError):           # Hop A: id plane must be int64
         pk.hopa_pack(torch.randn(3, 4), torch.rand(3, 2),
                      torch.zeros(3, dtype=torch.int32))
-    with pytest.raises(RuntimeError):           # Hop A:三个平面行数必须一致
+    with pytest.raises(RuntimeError):           # Hop A: all three planes must agree on row count
         pk.hopa_pack(torch.randn(3, 4), torch.rand(3, 2),
                      torch.zeros(4, dtype=torch.int64))
-    with pytest.raises(RuntimeError):           # Hop B:槽号面必须 int64
+    with pytest.raises(RuntimeError):           # Hop B: slot plane must be int64
         pk.hopb_pack_meta(torch.zeros(3, dtype=torch.int32), torch.rand(3))
-    with pytest.raises(RuntimeError):           # Hop B:gate 面必须浮点
+    with pytest.raises(RuntimeError):           # Hop B: gate plane must be floating point
         pk.hopb_pack_meta(torch.zeros(3, dtype=torch.int64),
                           torch.zeros(3, dtype=torch.int64))
-    with pytest.raises(RuntimeError):           # Hop B:两面必须同形状
+    with pytest.raises(RuntimeError):           # Hop B: both planes must share one shape
         pk.hopb_pack_meta(torch.zeros(3, dtype=torch.int64), torch.rand(4))
 
 
 def test_pack_switch_defaults_on_and_can_be_turned_off(monkeypatch):
-    """闸门:未设 / 非 "0" 为开;"0" 关(床上 A/B 与一键回滚靠它)。"""
+    """Gate: unset / non-"0" is on; "0" is off (the on-testbed A/B and the
+    one-command rollback rely on it)."""
     monkeypatch.delenv("TERRACE_TA2A_PACK", raising=False)
     pk.reset()
     assert pk.pack_enabled() is True
@@ -214,11 +247,11 @@ def test_pack_switch_defaults_on_and_can_be_turned_off(monkeypatch):
 
 
 # ======================================================================================
-# 2+3+4. 接缝层:同进程 A/B、厂商契约、条数与活路径
+# 2+3+4. Seam layer: same-process A/B, vendor contract, call counts and live path
 # ======================================================================================
 
 def _routing(gen, n_nodes, per, quota):
-    """T-Route 等额配额:恰好 M 个节点,每个节点恰好 K/M 个专家。"""
+    """T-Route equal-quota: exactly M nodes, exactly K/M experts per node."""
     rows = []
     for _ in range(T):
         gs = torch.randperm(n_nodes, generator=gen)[:M]
@@ -228,7 +261,7 @@ def _routing(gen, n_nodes, per, quota):
 
 
 def _bitdiff(a, b):
-    """None = 逐位相等;否则 (说明, max|Δ|) 供报错定位。"""
+    """None = bitwise equal; otherwise (description, max|Δ|) to localize the failure."""
     if a is None or b is None:
         return ("missing", None)
     if a.dtype != b.dtype:
@@ -240,8 +273,8 @@ def _bitdiff(a, b):
 
 def _run(rank, world, q, dtype_name):
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    # 已占用:29577/29591/29613/29623/29627/29641/29645/29661/29665/29677/
-    #         29681/29685/29697。本床两个 dtype 各一个。
+    # Ports in use: 29577/29591/29613/29623/29627/29641/29645/29661/29665/29677/
+    #               29681/29685/29697. This bed takes one per dtype.
     os.environ.setdefault(
         "MASTER_PORT", "29709" if dtype_name == "float32" else "29713")
     dist.init_process_group("gloo", rank=rank, world_size=world)
@@ -266,15 +299,17 @@ def _run(rank, world, q, dtype_name):
             counter[0] += 1
             return real_a2a(*args, **kwargs)
 
-        # 活路径计数器:并包臂必须 > 0,未并包臂必须 == 0。
-        # **两个 Hop A 打包器都要数**:small 形态(2026-08-22 起的默认)调
-        # hopa_pack_small,full 形态调 hopa_pack。只数其中一个,换形态时活路径证据
-        # 会静默变成 0,而"闸门从未打开"正是本文件要防的那件事(内部工程记录)。
+        # Live-path counters: must be > 0 on the packed arm, == 0 on the unpacked arm.
+        # **Count both Hop A packers**: the small form (default since 2026-08-22)
+        # calls hopa_pack_small, the full form calls hopa_pack. Count only one of
+        # them and the live-path evidence silently drops to 0 on a form switch —
+        # and "the gate never opened" is exactly what this file exists to prevent
+        # (internal engineering records).
         hits = {"hopa": 0, "hopb": 0}
         real_hopa = pack_mod.hopa_pack
         real_hopa_small = pack_mod.hopa_pack_small
         real_hopb = pack_mod.hopb_pack_meta
-        real_switch = pack_mod.pack_enabled      # 必须在被覆盖**之前**抓住原件
+        real_switch = pack_mod.pack_enabled      # grab the original **before** it is overridden
 
         def counting_hopa(*a, **kw):
             hits["hopa"] += 1
@@ -297,7 +332,7 @@ def _run(rank, world, q, dtype_name):
             g = torch.Generator().manual_seed(23 + rank)
             x0 = torch.randn(T, H, generator=g).to(pdt)
             idx = _routing(g, n_nodes, per, quota)
-            gates0 = torch.rand(T, K, generator=g)          # fp32:router 输出精度
+            gates0 = torch.rand(T, K, generator=g)          # fp32: router output precision
             w13_0 = (torch.randn(epr, H, 2 * D, generator=g) / (H ** 0.5)).to(pdt)
             w2_0 = (torch.randn(epr, D, H, generator=g) / (D ** 0.5)).to(pdt)
             G = torch.randn(T, H, generator=g).to(pdt)
@@ -308,7 +343,7 @@ def _run(rank, world, q, dtype_name):
 
             dist.all_to_all_single = counting_a2a
             try:
-                # ---- legacy 3 参接缝(普通 autograd)----
+                # ---- legacy 3-arg seam (plain autograd) ----
                 hidL = x0.clone().requires_grad_(True)
                 probL = probs_dense.clone().to(pdt).requires_grad_(True)
                 w13L = w13_0.clone().requires_grad_(True)
@@ -325,7 +360,8 @@ def _run(rank, world, q, dtype_name):
                 outL.backward(G)
                 seam_bwd = counter[0]
 
-                # ---- overlap 6 参接缝 + 厂商手写 backward 的逐步复刻 ----
+                # ---- overlap 6-arg seam + step-by-step replica of the vendor's
+                # handwritten backward ----
                 hidO = x0.clone().requires_grad_(True)
                 probO = probs_dense.clone().requires_grad_(True)
                 save = []
@@ -344,12 +380,14 @@ def _run(rank, world, q, dtype_name):
                 outO = ta2a_unpermute_overlap(eoO, stO, save)
                 (p1g, p1p, ncpu, p2ind, p2g, p2pd, p2pg, u1ind, u1g, u2ind) = save
 
-                outO.backward(G)                            # unpermute2 段
+                outO.backward(G)                            # unpermute2 segment
                 grad_red = _a2a_raw(u2ind.grad, stO.send_l, stO.recv_l)
-                u1g.backward(grad_red)                      # unpermute1 段
-                eoO.backward(u1ind.grad)                    # experts 等价物
-                # 厂商 gmm 分两次 .backward() 进 permute2 段:先 prob 路,再 token 路。
-                # Hop B 并包若焊成一枚融合节点,第二次会在这里当场炸。
+                u1g.backward(grad_red)                      # unpermute1 segment
+                eoO.backward(u1ind.grad)                    # experts equivalent
+                # The vendor's gmm enters the permute2 segment through two
+                # .backward() calls: the prob lane first, then the token lane.
+                # If Hop B packing were welded into one fused node, the second
+                # call would blow up right here.
                 p2pg.backward(pI.grad)
                 ggr = _a2a_raw(p2pd.grad, stO.recv_l, stO.send_l)
                 p2g.backward(dI.grad)
@@ -365,10 +403,10 @@ def _run(rank, world, q, dtype_name):
                 "O.perm": permO.detach(), "O.pp": ppO.detach(), "O.tpe": tpeO,
                 "O.out": outO.detach(), "O.gx": hidO.grad, "O.gp": probO.grad,
                 "O.gw13": w13O.grad, "O.gw2": w2O.grad,
-                # 厂商手工重放真正要读的四个 detach 叶
+                # the four detached leaves the vendor's manual replay actually reads
                 "O.p2in": p2ind.grad, "O.p2prob": p2pd.grad,
                 "O.u1in": u1ind.grad, "O.u2in": u2ind.grad,
-                # 契约与账目(不进逐位对比)
+                # contract and ledger (not part of the bitwise comparison)
                 "_counts": (seam_fwd, seam_bwd, disp_fwd),
                 "_splits": (list(stO.send_l), list(stO.recv_l),
                             list(stL.send_l), list(stL.recv_l)),
@@ -447,8 +485,9 @@ def _assert_bitwise(results, label):
         for tag, rep in r["report"].items():
             for name, d in rep["diffs"].items():
                 assert d is None, (
-                    f"rank {r['rank']} {label} {tag}: {name} 并包臂与未并包臂不逐位"
-                    f"相等 {d} —— 并包只许重排字节")
+                    f"rank {r['rank']} {label} {tag}: {name} packed arm vs "
+                    f"unpacked arm not bitwise equal {d} — packing may only "
+                    f"rearrange bytes")
 
 
 def _assert_contract(results, label):
@@ -456,61 +495,69 @@ def _assert_contract(results, label):
         for tag, rep in r["report"].items():
             cp, cq = rep["counts_packed"], rep["counts_plain"]
             assert cp == (PACKED_FWD, PACKED_BWD, PACKED_DISP), (
-                f"rank {r['rank']} {label} {tag}: 并包臂条数 {cp},应为 "
-                f"{(PACKED_FWD, PACKED_BWD, PACKED_DISP)}(legacy fwd/bwd, "
-                f"overlap dispatch)—— 多了即并包被静默回退,少了即有交换被丢弃")
+                f"rank {r['rank']} {label} {tag}: packed-arm call counts {cp}, "
+                f"expected {(PACKED_FWD, PACKED_BWD, PACKED_DISP)} (legacy "
+                f"fwd/bwd, overlap dispatch) — more means packing was silently "
+                f"reverted, fewer means an exchange was silently dropped")
             assert cq == (PLAIN_FWD, PLAIN_BWD, PLAIN_DISP), (
-                f"rank {r['rank']} {label} {tag}: 未并包臂条数 {cq},应为 "
-                f"{(PLAIN_FWD, PLAIN_BWD, PLAIN_DISP)} —— 对照臂形态变了,"
-                f"本文件的『改前公式』前提失效,须重审")
+                f"rank {r['rank']} {label} {tag}: unpacked-arm call counts {cq}, "
+                f"expected {(PLAIN_FWD, PLAIN_BWD, PLAIN_DISP)} — the control "
+                f"arm changed form; this file's 'pre-change formula' premise no "
+                f"longer holds, re-review required")
             assert rep["splits_same"], (
-                f"rank {r['rank']} {label} {tag}: st.send_l/recv_l 两臂不同 "
-                f"{rep['splits']} —— 那两份就是交给厂商 disp.input_splits/"
-                f"output_splits 的行数,并包不许改它的语义")
+                f"rank {r['rank']} {label} {tag}: st.send_l/recv_l differ "
+                f"between the arms {rep['splits']} — those two lists are exactly "
+                f"the row counts handed to the vendor's disp.input_splits/"
+                f"output_splits; packing must not change their semantics")
             n_send, n_recv, l_send, l_recv = rep["splits"]
             assert len(n_send) == WORLD and len(n_recv) == WORLD
             assert sum(n_send) == T * M, (
-                f"rank {r['rank']} {label} {tag}: Hop A splits 总和 {sum(n_send)} "
-                f"!= T*M={T * M} —— 交给厂商的必须是**行数**,不是缩放后的字节段数")
+                f"rank {r['rank']} {label} {tag}: Hop A splits sum {sum(n_send)} "
+                f"!= T*M={T * M} — what goes to the vendor must be **row "
+                f"counts**, not scaled byte-segment counts")
             assert (n_send, n_recv) == (l_send, l_recv)
             assert rep["seats"] == (10, True), (
-                f"rank {r['rank']} {label} {tag}: 席位契约变了 {rep['seats']}")
+                f"rank {r['rank']} {label} {tag}: seat contract changed {rep['seats']}")
 
 
 def _assert_live(results, label):
     for r in results:
         for tag, rep in r["report"].items():
             assert rep["hits_plain"] == {"hopa": 0, "hopb": 0}, (
-                f"rank {r['rank']} {label} {tag}: 未并包臂竟走了并包 "
-                f"{rep['hits_plain']} —— A/B 的对照臂失守,等价断言全是空转")
-            # legacy 接缝 1 次 + overlap 接缝 1 次
+                f"rank {r['rank']} {label} {tag}: the unpacked arm went through "
+                f"packing {rep['hits_plain']} — the A/B control arm is "
+                f"compromised; every equivalence assertion is vacuous")
+            # legacy seam once + overlap seam once
             assert rep["hits_packed"] == {"hopa": 2, "hopb": 2}, (
-                f"rank {r['rank']} {label} {tag}: 并包臂打包次数 "
-                f"{rep['hits_packed']},应为两条接缝各 1 次 —— 闸门没打开或"
-                f"某条接缝没接上(等价断言对这个是盲的,内部工程记录)")
+                f"rank {r['rank']} {label} {tag}: packed-arm pack call counts "
+                f"{rep['hits_packed']}, expected 1 per seam for the two seams — "
+                f"the gate did not open or one seam is not wired up (equivalence "
+                f"assertions are blind to this; internal engineering records)")
 
 
 @pytest.mark.timeout(300)
 def test_fp32_pack_is_bitwise(pack_fp32):
-    """fp32:两条接缝的前向、四路叶子梯度、四个 detach 叶 .grad,并包 == 未并包。"""
+    """fp32: both seams' forwards, four leaf gradients, four detached-leaf
+    .grad — packed == unpacked."""
     _assert_bitwise(pack_fp32, "fp32")
 
 
 @pytest.mark.timeout(300)
 def test_fp32_vendor_contract_and_counts(pack_fp32):
-    """条数降到 7/6(dispatch 半边 8 -> 5),splits 仍是行数、两臂逐项相等。"""
+    """Call counts drop to 7/6 (dispatch half 8 -> 5); splits are still row
+    counts, item-for-item equal across the arms."""
     _assert_contract(pack_fp32, "fp32")
 
 
 @pytest.mark.timeout(300)
 def test_fp32_pack_is_live(pack_fp32):
-    """活路径证据:并包臂真打了包,未并包臂真没打。"""
+    """Live-path evidence: the packed arm really packed, the unpacked arm really did not."""
     _assert_live(pack_fp32, "fp32")
 
 
 @pytest.mark.timeout(300)
 def test_bed_dtype_pack_is_bitwise(pack_bf16):
-    """床口径(bf16 载荷/权重 + fp32 router probs):同上,逐位。"""
+    """Testbed config (bf16 payload/weights + fp32 router probs): same as above, bitwise."""
     _assert_bitwise(pack_bf16, "bf16")
 
 
@@ -525,7 +572,7 @@ def test_bed_dtype_pack_is_live(pack_bf16):
 
 
 # ======================================================================================
-# 工程纪律:本文件自身 LF + py_compile
+# Engineering discipline: this file itself is LF + py_compile
 # ======================================================================================
 
 def test_this_file_compiles_and_is_lf():

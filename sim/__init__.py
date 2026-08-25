@@ -1,36 +1,43 @@
 # -*- coding: utf-8 -*-
-"""terrace-sim:用实测标定的 MoE-EP 通信仿真器 —— 一台机器的数据,许多台机器的答案。
+"""terrace-sim: an MoE-EP communication simulator calibrated from real measurements -- one machine's data, many machines' answers.
 
-## 为什么存在(2026-08-24 转向)
+## Why this exists (the 2026-08-24 pivot)
 
-T-A2A 在我们这台**带宽扁平**的超节点上判负(内部实测记录):
-盈亏判据 r_be = (1−1/R)q/(q−1) 要求快/慢带宽比 > 1.31(q=3),机器只给 ~1.0。
-但判据本身、以及"分层通信在层级化集群上划算"这个命题,需要在**许多种集群**上
-回答 —— 而我们只有一台。转向:把这台机器上攒下的全部实测,变成一个
-**可换集群参数**的仿真器。
+T-A2A got a negative verdict on our **bandwidth-flat** supernode (internal measurement records):
+the breakeven criterion r_be = (1-1/R)q/(q-1) demands a fast/slow bandwidth ratio > 1.31 (q=3);
+the machine gives only ~1.0. But the criterion itself -- and the proposition that hierarchical
+communication pays off on hierarchical clusters -- needs an answer across **many kinds of
+clusters**, and we have exactly one. The pivot: turn every measurement banked on this machine
+into a simulator with **swappable cluster parameters**.
 
-## 方法论(这是交付物的核心,不是代码)
+## Methodology (this is the core of the deliverable, not the code)
 
-    测量 -> 标定 -> 验证 -> 外推
+    measure -> calibrate -> validate -> extrapolate
 
-1. **测量**:微基准只测「原语」——α(world) 曲线、β(size) 曲线(分域:节点内/
-   跨节点/跨超节点)、每次调用的固定成本(splits 主机同步、本地索引链)。
-2. **标定**:仿真器的每个参数都指向一份实测文件,不许拍(terrace/commodel.py
-   的 manifest 纪律沿用到这里)。
-3. **验证(别的仿真工作最常缺的一环)**:仿真器必须先**复现我们自己的端到端
-   真值** —— 对照床 6 个几何的 G 值(含正负号与幅度,从 +2.8% 到 −21.8%)。
-   微基准标定、端到端验证,两套数据互相独立;预注册容差见 sim/validate.py,
-   **在跑之前写死**。
-4. **外推**:验证通过后,才允许换集群参数(层级比、α 曲线、R、incast)出结论。
-   外推结果一律标注「仿真」,与实测严格分列。
+1. **Measure**: microbenchmarks measure only "primitives" -- the alpha(world) curve, the
+   beta(size) curve (split by domain: intra-node / cross-node / cross-supernode), and the
+   fixed per-call costs (splits host sync, local index chain).
+2. **Calibrate**: every simulator parameter points at a measurement file; no hand-picked
+   numbers (the manifest discipline of terrace/commodel.py carries over here).
+3. **Validate (the step most simulation work skips)**: the simulator must first reproduce
+   our own end-to-end ground truth -- the G values of the control testbed's 6 geometries
+   (sign and magnitude, from +2.8% to -21.8%). Microbenchmark calibration and end-to-end
+   validation are two mutually independent datasets; preregistered tolerances are in
+   sim/validate.py, **frozen before the run**.
+4. **Extrapolate**: only after validation passes may cluster parameters (hierarchy ratio,
+   alpha curve, R, incast) be swapped to draw conclusions. Extrapolated results are always
+   labeled "simulation" and listed strictly apart from measurements.
 
-## 诚实边界
+## Honesty boundary
 
-- 仿真器预测的是 **Δ通信/G**,不是绝对步时:计算侧(GEMM/router)按几何标定为
-  常数,来自 off 臂实测 —— 所以它回答「换通信方案/换集群,快慢比怎么变」,
-  不回答「这个模型训多快」。
-- α 与 β 的跨集群外推基于「形状不变、尺度重标」假设,每次外推报告敏感性。
-- 不建模:重叠/流水(对照床两臂都无重叠,基线一致)、容错、网络抖动的尾部。
+- The simulator predicts **communication delta / G**, not absolute step time: the compute
+  side (GEMM/router) is calibrated to a per-geometry constant from off-arm measurements --
+  so it answers "how does the speed ratio move if you swap the communication scheme or the
+  cluster", not "how fast does this model train".
+- Cross-cluster extrapolation of alpha and beta rests on a "shape invariant, scale
+  recalibrated" assumption; every extrapolation reports sensitivity.
+- Not modeled: overlap/pipelining (neither control-testbed arm overlaps; baselines match),
+  fault tolerance, and the tails of network jitter.
 """
 from .core import ClusterSpec, MoEGeometry, one_hop_call, two_hop_call, step_delta
 from .validate import HOLDOUTS, validate

@@ -1,21 +1,25 @@
-"""集群侧编译 torch 绑定:terrace_ops.cpp -> terrace/ops/lib/terrace_ops.so。
+"""Cluster-side build of the torch binding: terrace_ops.cpp -> terrace/ops/lib/terrace_ops.so.
 
-只在集群跑(需 torch_npu 与已安装的 opp vendor 包;本地无 CANN 直接 sys.exit)。
-用 torch.utils.cpp_extension 免手写编译命令 -- 它自动带对 torch ABI 正确的
-编译旗标(-D_GLIBCXX_USE_CXX11_ABI 等,手写 makefile 最容易在这里翻车)。
+Runs on the cluster only (needs torch_npu and the installed opp vendor package;
+without CANN locally it sys.exit's outright). Uses torch.utils.cpp_extension to
+avoid hand-written compile commands -- it automatically carries the compile
+flags matching the torch ABI (-D_GLIBCXX_USE_CXX11_ABI etc.; a hand-written
+makefile trips over exactly that most easily).
 
-用法(先 source set_env.sh,再进训练 venv):
+Usage (source set_env.sh first, then enter the training venv):
     python terrace/ops/csrc/build_ext.py
-可调环境:
-    VENDOR_NAME       opp vendor 名,与 ascendc/build.sh 一致(缺省 terrace)
-    ASCEND_HOME_PATH  set_env.sh 已导出;CANN 头/库根
-    TERRACE_NINJA     ninja 可执行文件所在目录(缺省自动探测,见 _ensure_ninja)
-产物:
-    terrace/ops/lib/terrace_ops.so   (terrace/ops/__init__.py 的默认搜索位)
+Tunable environment:
+    VENDOR_NAME       opp vendor name, matching ascendc/build.sh (default terrace)
+    ASCEND_HOME_PATH  exported by set_env.sh; CANN header/library root
+    TERRACE_NINJA     directory holding the ninja executable (default:
+                      auto-detect, see _ensure_ninja)
+Artifact:
+    terrace/ops/lib/terrace_ops.so   (the default search location of terrace/ops/__init__.py)
 
-**必须用训练用的那个 venv 编**:.so 链的是该 venv 的 libtorch/libtorch_npu,
-ABI 与 torch 版本绑死。用你训练用的同一个环境编译(实测口径:
-你的 venv(torch 2.9.0 + torch_npu 2.9.0.post2)。
+**Must be built with the venv used for training**: the .so links that venv's
+libtorch/libtorch_npu; the ABI is pinned to the torch version. Build in the
+same environment you train in (measured baseline: your venv
+(torch 2.9.0 + torch_npu 2.9.0.post2)).
 """
 from __future__ import annotations
 
@@ -33,13 +37,16 @@ def _fail(msg: str) -> None:
 
 
 def _ensure_ninja() -> None:
-    """把 ninja 可执行文件塞进 PATH。
+    """Put the ninja executable on PATH.
 
-    torch.utils.cpp_extension.load() 硬性要求 ninja **可执行文件**(它 subprocess
-    调 `ninja --version`),光有 python 包不算数。集群实测:训练 venv 是叠在 conda
-    env 上的,ninja 包能 import(BIN_DIR 却是空串),而可执行文件躺在底下 conda env
-    的 bin/ 里,不在 venv 的 bin/ 里 —— 于是 verify_ninja_availability() 报
-    "Ninja is required to load C++ extensions",看着像没装,其实只是没在 PATH 上。
+    torch.utils.cpp_extension.load() hard-requires the ninja **executable** (it
+    subprocesses `ninja --version`); having only the python package does not
+    count. Measured on the cluster: the training venv is layered on a conda
+    env, the ninja package imports fine (yet BIN_DIR is an empty string) while
+    the executable sits in the underlying conda env's bin/, not the venv's
+    bin/ -- so verify_ninja_availability() reports "Ninja is required to load
+    C++ extensions", which looks like a missing install but is really just a
+    PATH miss.
     """
     from torch.utils.cpp_extension import verify_ninja_availability
 
@@ -54,14 +61,15 @@ def _ensure_ninja() -> None:
     if explicit:
         candidates.append(explicit)
     try:
-        import ninja  # noqa: F401  (pip 包;BIN_DIR 在老版本上可能是空串)
+        import ninja  # noqa: F401  (pip package; BIN_DIR may be an empty string on old versions)
         bin_dir = getattr(ninja, "BIN_DIR", "") or ""
         if bin_dir:
             candidates.append(bin_dir)
         candidates.append(os.path.join(os.path.dirname(ninja.__file__), "data", "bin"))
     except ImportError:
         pass
-    # venv 的 bin,以及它叠在其上的 base 解释器(conda env)的 bin。
+    # The venv's bin, plus the bin of the base interpreter (the conda env) it
+    # is layered on.
     candidates.append(os.path.join(sys.prefix, "bin"))
     candidates.append(os.path.join(sys.base_prefix, "bin"))
     candidates.append(os.path.dirname(sys.executable))
@@ -70,14 +78,14 @@ def _ensure_ninja() -> None:
         exe = os.path.join(d, "ninja")
         if os.path.isfile(exe) and os.access(exe, os.X_OK):
             os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
-            print(f"[build_ext] ninja 不在 PATH 上,已补入: {exe}")
+            print(f"[build_ext] ninja was not on PATH, added: {exe}")
             try:
                 verify_ninja_availability()
-            except Exception as e:                       # 补了还是不行,fail loud
-                _fail(f"补 PATH 后 ninja 仍不可用: {e}")
+            except Exception as e:                       # still broken after the PATH fix, fail loud
+                _fail(f"ninja still unusable after patching PATH: {e}")
             return
-    _fail("找不到 ninja 可执行文件 —— 指定 TERRACE_NINJA=<含 ninja 的目录>,"
-          f"或 pip install ninja。已试过: {candidates}")
+    _fail("ninja executable not found -- set TERRACE_NINJA=<directory containing "
+          f"ninja>, or pip install ninja. Tried: {candidates}")
 
 
 def main() -> None:
@@ -85,18 +93,19 @@ def main() -> None:
         import torch  # noqa: F401
         import torch_npu
     except ImportError as e:
-        _fail(f"需要 torch + torch_npu(集群训练 venv):{e}")
+        _fail(f"torch + torch_npu required (cluster training venv): {e}")
 
     cann = os.environ.get("ASCEND_HOME_PATH")
     if not cann or not os.path.isdir(cann):
-        _fail("ASCEND_HOME_PATH 未设 -- 先 source ascend-toolkit/set_env.sh")
+        _fail("ASCEND_HOME_PATH unset -- source ascend-toolkit/set_env.sh first")
 
     vendor = os.environ.get("VENDOR_NAME", "terrace")
     opp = os.environ.get("ASCEND_OPP_PATH", os.path.join(cann, "opp"))
     op_api = os.path.join(opp, "vendors", vendor, "op_api")
     if not os.path.isfile(os.path.join(op_api, "lib", "libcust_opapi.so")):
-        _fail(f"{op_api}/lib/libcust_opapi.so 不存在 -- 先跑 ascendc/build.sh "
-              f"装 opp 包(或 VENDOR_NAME 与装包时不一致)")
+        _fail(f"{op_api}/lib/libcust_opapi.so does not exist -- run ascendc/build.sh "
+              f"first to install the opp package (or VENDOR_NAME differs from the "
+              f"one used at install time)")
 
     npu_root = os.path.dirname(os.path.abspath(torch_npu.__file__))
 
@@ -117,29 +126,35 @@ def main() -> None:
             f"-L{os.path.join(op_api, 'lib')}",
             f"-L{os.path.join(npu_root, 'lib')}",
             "-lascendcl", "-lnnopbase", "-lcust_opapi", "-ltorch_npu",
-            # rpath:运行期不靠 LD_LIBRARY_PATH 也能找到 vendor 包与 CANN 库
+            # rpath: find the vendor package and CANN libraries at runtime
+            # without relying on LD_LIBRARY_PATH
             f"-Wl,-rpath,{os.path.join(op_api, 'lib')}",
             f"-Wl,-rpath,{os.path.join(cann, 'lib64')}",
             f"-Wl,-rpath,{os.path.join(npu_root, 'lib')}",
         ],
         build_directory=LIB_DIR,
         verbose=True,
-        # **必须 False**。本 .so 是算子注册库（TORCH_LIBRARY），不是 python 扩展模块：
-        # 里面没有 PyInit_terrace_ops。缺省 is_python_module=True 会让 load() 在编译
-        # 链接**全部成功之后**才死在最后一步 import 上：
+        # **Must be False**. This .so is an op-registration library
+        # (TORCH_LIBRARY), not a python extension module: there is no
+        # PyInit_terrace_ops inside. The default is_python_module=True makes
+        # load() die at the final import step **after** compiling and linking
+        # fully succeed:
         #   ImportError: dynamic module does not define module export function (PyInit_terrace_ops)
-        # 置 False 后 torch 改用 torch.ops.load_library() 加载。
+        # With False, torch loads it via torch.ops.load_library() instead.
         is_python_module=False,
     )
-    del module   # is_python_module=False 时返回值因 torch 版本而异（不一定是 None），
-                 # 不拿它当凭据 —— 以下面的产物回读为准。
-    # is_python_module=False 时产物就落在 build_directory/<name>.so，名字已经是
-    # 加载器约定的 terrace_ops.so，不用再拷一份。回读校验存在。
+    del module   # With is_python_module=False the return value varies by torch
+                 # version (not necessarily None); do not treat it as evidence
+                 # -- the artifact read-back below is authoritative.
+    # With is_python_module=False the artifact lands at
+    # build_directory/<name>.so, already named terrace_ops.so per the loader
+    # convention; no extra copy needed. Read back to verify it exists.
     target = os.path.join(LIB_DIR, "terrace_ops.so")
     if not os.path.isfile(target):
-        _fail(f"编完了但找不到 {target} —— build_directory 布局变了?")
+        _fail(f"build finished but {target} is missing -- did the "
+              f"build_directory layout change?")
     print(f"[build_ext] OK -> {target}")
-    print("[build_ext] 冒烟: TERRACE_CUSTOM_OPS=require python -c "
+    print("[build_ext] smoke test: TERRACE_CUSTOM_OPS=require python -c "
           "\"import torch,torch_npu,terrace.ops as o; x=torch.randn(8,2048,"
           "dtype=torch.bfloat16).npu(); y=o.passthrough(x); "
           "assert torch.equal(y.cpu(), x.cpu()); print('bitwise OK', o.status())\"")

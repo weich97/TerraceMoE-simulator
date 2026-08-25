@@ -1,40 +1,40 @@
-# 融合算子(AscendC)状态
+# Fused Kernel (AscendC) Status
 
-到达链(02 篇 §数据流第 4 步)的 PyTorch 组合链是两跳额外成本的最大单项——比字节差还大。`terrace/ops/` 是把它融成单 kernel 的工程,按诚实状态列出:
+The arrival chain (doc 02, data-flow step 4) as a PyTorch composite chain is the largest single item of two-hop extra cost — larger than the byte difference. `terrace/ops/` is the effort to fuse it into a single kernel; honest status per component:
 
-| 组件 | 内容 | 状态 |
+| Component | What it is | Status |
 |---|---|---|
-| `passthrough` | 恒等拷贝,链路验证专用 | **设备位级验证通过**(四种形状 0 错) |
-| `k1_arrival` | 到达链融合:配对展开 + owner 稳定桶排 + counts 直方图 + 发送 gather | **算法已证正确,设备端翻译有一处未修的 bug**(见下) |
-| `k2_pack` | 发送侧打包链 | 编译通过,**未上机位级验证** |
-| CPU 可执行规格 | `terrace/ops/__init__.py::k1_arrival_ref` 等 | 与现组合链逐位一致,由测试把守 |
+| `passthrough` | identity copy, for link verification only | **bit-level verified on device** (0 errors across four shapes) |
+| `k1_arrival` | arrival-chain fusion: pair expansion + stable bucket sort by owner + counts histogram + send gather | **algorithm proven correct; one unfixed bug in the device-side translation** (below) |
+| `k2_pack` | send-side pack chain | compiles; **no on-device bit-level verification yet** |
+| CPU executable spec | `terrace/ops/__init__.py::k1_arrival_ref` etc. | bit-for-bit identical to the current composite chain, guarded by tests |
 
-## 无 .so 时的行为
+## Behavior without the .so
 
-`TERRACE_CUSTOM_OPS` 未设或为 0 时,一切走 CPU/组合链参考实现,**位级等价、零行为变化**——kernel 是纯加速件,不是正确性依赖。**默认是关**:能编译 ≠ 算得对,启用融合算子必须显式设 `TERRACE_CUSTOM_OPS=1`(理由:我们经历过"未过位级校验的 kernel 因编译成功而自动上线"的事故,默认开会把构建成功当成行为正确的证据)。
+With `TERRACE_CUSTOM_OPS` unset or 0, everything runs the CPU/composite-chain reference implementation — **bit-level equivalent, zero behavior change** — the kernel is a pure accelerator, not a correctness dependency. **The default is off**: compiling ≠ computing correctly, so enabling the fused kernels requires an explicit `TERRACE_CUSTOM_OPS=1` (reason: we lived through an incident where a kernel that had never passed bit-level checks went live automatically because it compiled; default-on treats build success as evidence of behavioral correctness).
 
-## K1 的已知 bug(定位已到手术精度,欢迎修)
+## K1's known bug (localized to surgical precision — fixes welcome)
 
-诊断分两步走完:
+The diagnosis completed in two steps:
 
-1. **MTE 越界异常已除**:根因是 GM→UB→GM 搬运缺 VECOUT 队列(见下方教训 1),
-   补上后设备异常消失。
-2. **剩余错误钉死在「非 core 0 的标量 GM 写不可见」**。带 dump 的一发给出三条
-   互斥证据:
-   - `send_buf`(MTE 搬运路径)**0 错** —— 载荷全对;
-   - `i_send`(仅 core 0 做标量写)**0 错** —— 第一遍计数全对;
-   - `slot_idx`/`gate_pairs`/`r_idx`(各 core 各自标量写)错的位置**恰好是
-     非 core 0 负责的 dst**(1 行输入时错在 [1,2],2 行输入时错在 [1,4,5];
-     两次 dump 都是多核运行,变化轴是输入行数)。
-   MTE 路全对 + 单核标量写全对 + 多核标量写选择性丢 ⇒
-   `GlobalTensor::SetValue` 的跨核可见性问题。
-- **修法方向**:元数据写从标量 `SetValue` 改走 UB 缓冲 + `DataCopy`(MTE3)——
-  与载荷同一条已被证明可见的路径。
-- 修复者从 `k1_arrival_ref`(逐位规格,`tests/test_terrace_k1_arrival.py` 把守)
-  对照 `op_kernel/terrace_k1_arrival.cpp` 入手最快。
+1. **The MTE out-of-bounds exception is gone**: root cause was a missing VECOUT queue on the GM→UB→GM move (see lesson 1 below);
+   after adding it, the device exception disappeared.
+2. **The remaining error is pinned to "scalar GM writes from non-core-0 are not visible".** One run with dumps produced three
+   mutually exclusive pieces of evidence:
+   - `send_buf` (the MTE move path): **0 errors** — payload all correct;
+   - `i_send` (scalar writes done by core 0 only): **0 errors** — first-pass counts all correct;
+   - `slot_idx`/`gate_pairs`/`r_idx` (each core doing its own scalar writes): the wrong positions are **exactly the dsts
+     owned by non-core-0** (with 1 input row the errors sit at [1,2]; with 2 input rows at [1,4,5];
+     both dumps ran multi-core, and the only varying axis is the input row count).
+   MTE path all correct + single-core scalar writes all correct + multi-core scalar writes selectively lost ⇒
+   a cross-core visibility problem with `GlobalTensor::SetValue`.
+- **Fix direction**: move the metadata writes off scalar `SetValue` onto a UB buffer + `DataCopy` (MTE3) —
+  the same path the payload uses, already proven visible.
+- The fastest entry for a fixer: work from `k1_arrival_ref` (the bit-exact spec, guarded by `tests/test_terrace_k1_arrival.py`)
+  against `op_kernel/terrace_k1_arrival.cpp`.
 
-## 三条移植性教训(写给改 kernel 的人)
+## Three portability lessons (for whoever edits the kernels)
 
-1. **GM→UB→GM 的搬运必须同时有 VECIN 与 VECOUT 两条队列。** 队列的位置决定它同步哪两条流水(VECIN 配 MTE2→V,VECOUT 配 V→MTE3);只有 VECIN 时那道 MTE3 屏障没人插,写出的是脏数据——**编译不报、加载不报、执行不报,只有逐位比对才现形**。`tests/test_terrace_k1_arrival.py` 里有源码级护栏钉住这一条。
-2. **位级判据是可达的,别用近似。** 到达链只有 gather/置换、没有归约,输出必须逐位等于参考——不逐位就是索引错了,不是精度问题。
-3. **验证要对着加载成功的 .so 跑,且第一次设备异常后停止**——卡进错误态后的用例是同一次故障的回声,不是独立证据。
+1. **A GM→UB→GM move must have both a VECIN and a VECOUT queue.** A queue's position decides which two pipelines it synchronizes (VECIN pairs MTE2→V, VECOUT pairs V→MTE3); with only VECIN, nobody inserts that MTE3 barrier and the write emits dirty data — **no compile error, no load error, no runtime error; only bit-level comparison exposes it**. `tests/test_terrace_k1_arrival.py` carries a source-level guard pinning this down.
+2. **The bit-level criterion is attainable — do not settle for approximate.** The arrival chain has only gather/permutation, no reduction; the output must equal the reference bit for bit — anything less means an index bug, not a precision issue.
+3. **Verify against a .so that actually loaded, and stop at the first device exception** — test cases after the card enters a fault state are echoes of the same failure, not independent evidence.

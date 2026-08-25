@@ -2,7 +2,7 @@
 
 One process per die = one EP rank holding E/W experts. This is the real
 distributed path whose output must match the CPU-verified emulate_ep_experts
-(旧 EP 参考实现(未随仓发布)) and the single-process reference. Metadata (token counts) and
+(an older EP reference implementation, not shipped with this repo) and the single-process reference. Metadata (token counts) and
 payloads are exchanged with all_to_all_single over HCCL.
 """
 from __future__ import annotations

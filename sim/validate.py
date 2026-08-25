@@ -1,25 +1,28 @@
 # -*- coding: utf-8 -*-
-"""验证门:仿真器必须先复现我们自己的端到端真值,才有资格外推。
+"""Validation gate: the simulator must first reproduce our own end-to-end ground truth before it earns the right to extrapolate.
 
-## 预注册(2026-08-24,写于第一次运行之前,不许事后改)
+## Preregistration (2026-08-24, written before the first run; no after-the-fact edits)
 
-**标定点(1 个)**:`flag`。combine 侧的实现差(on 臂 combine 反而更快,机制
-未完全解释,内部实测记录/内部实测记录)无法从第一性原理给出,用 flag 的步级
-真值反解一个常数 `combine_extra_ms`,**它对其余保留几何保持不变**。
+**Calibration point (1)**: `flag`. The combine-side implementation delta (the on arm's
+combine is actually faster; mechanism not fully explained, internal measurement
+records/internal measurement records) cannot be derived from first principles; a constant
+`combine_extra_ms` is back-solved from flag's step-level ground truth and **held fixed
+for all remaining holdout geometries**.
 
-**保留验证点(不参与任何拟合)**:tok2x / tok4x / k8m2 / k8m4 / n8(预注册 5 个)
-+ n4(预注册后加入的规模轴第三点;门的阈值数字不动,分母如实按 6 计)。
+**Holdout validation points (never used in any fit)**: tok2x / tok4x / k8m2 / k8m4 / n8
+(the 5 preregistered) + n4 (a third scale-axis point added after preregistration; the
+gate's threshold numbers stay put, the denominator honestly counts 6).
 
-**门(全部满足才算通过;阈值为预注册原文,分母按现状如实标)**:
-  1. 保留点的 G 预测,平均绝对误差 MAE ≤ 0.025(n4 加入后按 6 点计);
-  2. 至少 4 点落在 ±0.035 内(预注册写作 4/5,分母现为 6);
-  3. 四个预注册负号点(tok2x/tok4x/k8m4/n8)方向全对(G_pred < 1)。
+**Gate (all must hold to pass; thresholds are the preregistered originals, denominators labeled as they now stand)**:
+  1. G predictions on holdout points: mean absolute error MAE ≤ 0.025 (over 6 points after n4 joined);
+  2. at least 4 points within ±0.035 (preregistered as 4/5; the denominator is now 6);
+  3. all four preregistered sign points (tok2x/tok4x/k8m4/n8) in the right direction (G_pred < 1).
 
-不过门就不许外推 —— sweep 模块在运行时检查这个门。
+No gate pass, no extrapolation -- the sweep module checks this gate at runtime.
 
-## 端到端真值(对照床,同配置只换 a2a;出处:内部实测记录/内部实测记录/内部实测记录)
+## End-to-end ground truth (control testbed, identical config except the a2a; provenance: internal measurement records/internal measurement records/internal measurement records)
 
-步时为稳态中位(掐头 300 步,n=10/臂);G = t_off / t_on。
+Step time is the steady-state median (first 300 steps trimmed, n=10/arm); G = t_off / t_on.
 """
 from __future__ import annotations
 
@@ -31,8 +34,8 @@ from .core import MoEGeometry, step_delta
 @dataclass
 class Holdout:
     geom: MoEGeometry
-    t_off_ms: float          # 厂商臂实测步时
-    g_measured: float        # 实测 G
+    t_off_ms: float          # measured step time of the vendor arm
+    g_measured: float        # measured G
     role: str                # "calibration" | "holdout"
 
 
@@ -42,32 +45,33 @@ def _g(name, ng, R, k, M, mbs, layers=19):
 
 
 HOLDOUTS = [
-    # flag:base 档配对组均值(内部实测记录);作**标定点**
-    Holdout(_g("flag", 16, 8, 6, 2, 1), 4420.4, 1.0355, "calibration"),  # n=7 均值(t=3.27, p≈0.017 显著)
-    # 保留验证点
-    Holdout(_g("tok2x", 16, 8, 6, 2, 2), 3343.6, 0.8845, "holdout"),   # 三发均值,散布 0.8%
-    Holdout(_g("tok4x", 16, 8, 6, 2, 4), 2992.7, 0.8234, "holdout"),   # 三发均值,散布 0.6%
+    # flag: paired-group mean at the base tier (internal measurement records); the **calibration point**
+    Holdout(_g("flag", 16, 8, 6, 2, 1), 4420.4, 1.0355, "calibration"),  # n=7 mean (t=3.27, p≈0.017, significant)
+    # holdout validation points
+    Holdout(_g("tok2x", 16, 8, 6, 2, 2), 3343.6, 0.8845, "holdout"),   # mean of three runs, spread 0.8%
+    Holdout(_g("tok4x", 16, 8, 6, 2, 4), 2992.7, 0.8234, "holdout"),   # mean of three runs, spread 0.6%
     Holdout(_g("k8m2", 16, 8, 8, 2, 1), 4791.7, 0.9935, "holdout"),
     Holdout(_g("k8m4", 16, 8, 8, 4, 1), 4664.9, 0.9335, "holdout"),
     Holdout(_g("n8", 8, 8, 6, 2, 1), 6657.5, 0.9027, "holdout"),
-    Holdout(_g("n4", 4, 8, 6, 2, 1), 11712.0, 0.8647, "holdout"),   # 规模轴第三点
+    Holdout(_g("n4", 4, 8, 6, 2, 1), 11712.0, 0.8647, "holdout"),   # third point on the scale axis
 ]
 
 
 def predict_g(cluster, h: Holdout, combine_extra_ms: float) -> float:
-    """G 预测 = t_off / (t_off + Δstep)。
+    """G prediction = t_off / (t_off + delta_step).
 
-    Δstep = dispatch 差 x dispatch 次数 + combine 差 x combine 次数。
-    dispatch 差用完整模型;combine 的通信字节镜像 dispatch,但实现侧的差
-    用标定常数 combine_extra_ms 替代 local_chain(见模块 docstring)。
+    delta_step = dispatch delta x dispatch calls + combine delta x combine calls.
+    The dispatch delta uses the full model; combine's communication bytes mirror
+    dispatch, but the implementation-side delta substitutes the calibrated constant
+    combine_extra_ms for local_chain (see the module docstring).
     """
     d = step_delta(cluster, h.geom)
     calls_fwd = h.geom.calls_per_step_fwd() + h.geom.calls_per_step_bwd()
     chain_ms = cluster.chain_us_per_row * h.geom.rows_hop_b() / 1000.0
-    # dispatch:模型全量
+    # dispatch: full model
     disp_delta = (d["per_call_on_ms"] - d["per_call_off_ms"]) * calls_fwd
-    # combine:通信部分同 dispatch(镜像);实现差按行标定
-    # (combine_extra_ms 实为 flag 行数下的值,换几何按行数缩放)
+    # combine: communication part same as dispatch (mirror); implementation delta calibrated per row
+    # (combine_extra_ms is really the value at flag's row count; scale by row count for other geometries)
     comm_delta = d["per_call_on_ms"] - chain_ms - d["per_call_off_ms"]
     scale = h.geom.rows_hop_b() / 24576.0
     comb_delta = (comm_delta + combine_extra_ms * scale) * calls_fwd
@@ -76,7 +80,7 @@ def predict_g(cluster, h: Holdout, combine_extra_ms: float) -> float:
 
 
 def calibrate_combine(cluster) -> float:
-    """从标定点(flag)反解 combine_extra_ms。"""
+    """Back-solve combine_extra_ms from the calibration point (flag)."""
     h = next(x for x in HOLDOUTS if x.role == "calibration")
     d = step_delta(cluster, h.geom)
     calls = h.geom.calls_per_step_fwd() + h.geom.calls_per_step_bwd()
@@ -90,7 +94,7 @@ def calibrate_combine(cluster) -> float:
 
 
 def validate(cluster, verbose: bool = True):
-    """跑验证门。返回 (通过?, 明细)。"""
+    """Run the validation gate. Returns (passed?, details)."""
     ce = calibrate_combine(cluster)
     rows, errs, in_tol, signs_ok = [], [], 0, 0
     neg = {"tok2x", "tok4x", "k8m4", "n8"}
@@ -107,13 +111,14 @@ def validate(cluster, verbose: bool = True):
     mae = sum(errs) / len(errs)
     ok = (mae <= 0.025) and (in_tol >= 4) and (signs_ok == len(neg))
     if verbose:
-        print("验证门(标定点 flag 反解 combine_extra=%.3f ms/次)" % ce)
-        print("%-8s %-12s %8s %8s %8s" % ("几何", "角色", "实测G", "预测G", "误差"))
+        print("Validation gate (calibration point flag back-solves combine_extra=%.3f ms/call)" % ce)
+        print("%-8s %-12s %8s %8s %8s" % ("geom", "role", "G_meas", "G_pred", "err"))
         for n, r, gm, gp, e in rows:
             print("%-8s %-12s %8.4f %8.4f %+8.4f" % (n, r, gm, gp, e))
-        print("保留点 MAE=%.4f(门 0.025)  ±0.035 内 %d/6(门 4)  负号 %d/4(门 4)"
+        print("holdout MAE=%.4f (gate 0.025)  within ±0.035: %d/6 (gate 4)  signs: %d/4 (gate 4)"
               % (mae, in_tol, signs_ok))
-        print("**%s**" % ("通过 —— 允许外推" if ok else "不通过 —— 禁止外推,先修模型"))
+        print("**%s**" % ("PASS -- extrapolation allowed" if ok else
+                          "FAIL -- extrapolation forbidden; fix the model first"))
     return ok, {"mae": mae, "in_tol": in_tol, "signs_ok": signs_ok,
                 "combine_extra_ms": ce, "rows": rows}
 

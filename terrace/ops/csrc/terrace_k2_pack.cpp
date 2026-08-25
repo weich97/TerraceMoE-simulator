@@ -1,21 +1,30 @@
 /**
- * terrace_k2_pack -- torch.library 绑定:torch.ops.terrace.k2_pack -> aclnn 两段式。
+ * terrace_k2_pack -- torch.library binding: torch.ops.terrace.k2_pack -> aclnn two-phase call.
  *
- * 独立编译单元,**不动 terrace_ops.cpp**(K1 热改期间零冲突,「备好即嫁接」):
- *   - TORCH_LIBRARY(terrace) 的唯一定义在 terrace_ops.cpp;本文件用
- *     TORCH_LIBRARY_FRAGMENT(terrace) 往同一命名空间追加 schema —— torch 官方
- *     多编译单元扩展同一 namespace 的标准写法,两个 .cpp 链进同一个 .so 即可。
- *   - 挂进构建:build_ext.py 的 sources 列表加本文件(一行 diff,见
- *     terrace/ops/内部嫁接记录(未随仓发布);不嫁接则本文件不参与编译,零影响)。
+ * A standalone compilation unit that **does not touch terrace_ops.cpp** (zero
+ * conflicts while K1 is under active modification; "prepare now, graft later"):
+ *   - The sole TORCH_LIBRARY(terrace) definition lives in terrace_ops.cpp; this
+ *     file appends a schema to the same namespace via
+ *     TORCH_LIBRARY_FRAGMENT(terrace) -- torch's standard idiom for extending
+ *     one namespace from multiple compilation units; just link both .cpp into
+ *     the same .so.
+ *   - Hooking into the build: add this file to build_ext.py's sources list (a
+ *     one-line diff, see the terrace/ops/ internal grafting notes (not
+ *     published with this repo); ungrafted, this file is not compiled and has
+ *     zero impact).
  *
- * schema:k2_pack(Tensor hidden, Tensor expert_idx, Tensor gates, int world,
+ * schema: k2_pack(Tensor hidden, Tensor expert_idx, Tensor gates, int world,
  *   int n_experts, int rpn, int groups_m) -> (Tensor, Tensor, Tensor, Tensor,
- *   Tensor) = (payload, mask, gate_rows, u_src, node_counts)。
- * 功能规格 = quota 快路径发送段现组合链(plan_ta2a 快路径 + 去重 gather +
- * _pack_quota_wire)逐位复刻,论证见 op_kernel/terrace_k2_pack.cpp 文件头。
- * payload/gate_rows 可微(反向 = 现组合链 index_add/gather,Python 侧
- * autograd.Function 承担,注册块见 内部嫁接记录(未随仓发布));mask/u_src/node_counts 是
- * 索引/计数平面,Python 侧 mark_non_differentiable。
+ *   Tensor) = (payload, mask, gate_rows, u_src, node_counts).
+ * Functional spec = a bit-for-bit replica of the current composite chain of the
+ * quota fast-path send stage (plan_ta2a fast path + dedup gather +
+ * _pack_quota_wire); the argument lives in the op_kernel/terrace_k2_pack.cpp
+ * file header.
+ * payload/gate_rows are differentiable (backward = the composite chain's
+ * index_add/gather, carried by a Python-side autograd.Function; the
+ * registration block is in the internal grafting notes (not published with
+ * this repo)); mask/u_src/node_counts are index/count planes,
+ * mark_non_differentiable on the Python side.
  */
 #include <map>
 #include <vector>
@@ -24,19 +33,24 @@
 #include <torch/library.h>
 
 #include "acl/acl.h"
-// aclTensor 构造/销毁。个别 CANN 8.x 发行版头文件名不同:若编译报找不到,
-// 在 ${ASCEND_HOME_PATH}/include 下 grep -rl aclCreateTensor 换成实名(构建脚本 ascendc/build.sh 的头注)。
+// aclTensor create/destroy. Some CANN 8.x releases name this header
+// differently: if the compile cannot find it, grep -rl aclCreateTensor under
+// ${ASCEND_HOME_PATH}/include and use the real name (header comment of the
+// build script ascendc/build.sh).
 #include "aclnn/acl_meta.h"
-// opp vendor 包安装后生成的算子专属头(vendors/<vendor>/op_api/include)。
+// Op-specific header generated once the opp vendor package is installed
+// (vendors/<vendor>/op_api/include).
 #include "aclnn_terrace_k2_pack.h"
 
-// torch_npu:取当前 NPU 流。头/库路径由 build_ext.py 注入。
+// torch_npu: grab the current NPU stream. Header/library paths injected by
+// build_ext.py.
 #include "torch_npu/csrc/core/npu/NPUStream.h"
 
 namespace {
 
-// at::Tensor -> aclTensor 视图(不拷数据)。contiguous 由调用方保证。
-// (与 terrace_ops.cpp 的同名函数同文,匿名命名空间隔离,无 ODR 冲突。)
+// at::Tensor -> aclTensor view (no data copy). The caller guarantees contiguous.
+// (Verbatim copy of the same-named function in terrace_ops.cpp; the anonymous
+// namespace isolates it, no ODR conflict.)
 aclTensor *MakeAclTensor(const at::Tensor &t)
 {
     static const std::map<at::ScalarType, aclDataType> kDtype = {
@@ -94,7 +108,8 @@ K2Out k2_pack_npu(const at::Tensor &hidden, const at::Tensor &expert_idx,
                 T * K < (1LL << 31),
                 "terrace::k2_pack: geometry exceeds kernel bounds (n_nodes<=256, "
                 "k<=64, n_experts<2^31, T*k<2^31)");
-    // host tiling 拒绝非 32B 整除的行宽(K1 同款 fail loud);这里先给人话报错。
+    // Host tiling rejects row widths not divisible into 32B (same fail-loud as
+    // K1); give the human-readable error here first.
     TORCH_CHECK((H * hidden.element_size()) % 32 == 0,
                 "terrace::k2_pack: hidden*esize must be 32B-aligned, got H=", H,
                 " esize=", hidden.element_size());
@@ -104,10 +119,13 @@ K2Out k2_pack_npu(const at::Tensor &hidden, const at::Tensor &expert_idx,
     at::Tensor gc = gates.contiguous();
     const int64_t n_rows = T * groups_m;
 
-    // payload 正常路径下每行恰写一次(计数排序是 [0, T*M) 上的双射)-> empty;
-    // mask/gate_rows/u_src/node_counts 用 zeros:_pack_quota_wire 的 zeros 收容
-    // 原文(配额不变量漂移窗口内被跳过的行 == 槽 0/gate 0,确定且形状无害),
-    // 兼 T == 0 时 kernel 不发射(下方短路)、零平面即正确答案(K1 i_send 同款)。
+    // On the normal path payload writes each row exactly once (the counting
+    // sort is a bijection on [0, T*M)) -> empty; mask/gate_rows/u_src/
+    // node_counts use zeros: the original zeros-containment rationale of
+    // _pack_quota_wire (rows skipped inside a quota-invariant drift window ==
+    // slot 0 / gate 0, deterministic and shape-harmless), and doubly so because
+    // when T == 0 the kernel never launches (short-circuit below) and the zero
+    // planes are the correct answer (same as K1's i_send).
     at::Tensor payload = at::empty({n_rows, H}, hc.options());
     at::Tensor mask = at::zeros({n_rows, quota}, ic.options());
     at::Tensor gate_rows = at::zeros({n_rows, quota}, gc.options());
@@ -128,15 +146,18 @@ K2Out k2_pack_npu(const at::Tensor &hidden, const at::Tensor &expert_idx,
 
     uint64_t workspaceSize = 0;
     aclOpExecutor *executor = nullptr;
-    // aclnn 生成签名顺序:输入张量 -> int 属性 -> 输出张量(msopgen aclnn 约定;
-    // 若本 drop 生成的头顺序不同,以 aclnn_terrace_k2_pack.h 为准 —— 集群编译
-    // 验证点,编译期签名不符即报错,fail loud)。
+    // aclnn generated signature order: input tensors -> int attributes ->
+    // output tensors (the msopgen aclnn convention; if this drop's generated
+    // header orders things differently, aclnn_terrace_k2_pack.h is
+    // authoritative -- a cluster-compile verification point; a signature
+    // mismatch errors at compile time, fail loud).
     auto ret = aclnnTerraceK2PackGetWorkspaceSize(
         hAcl, iAcl, gAcl, world, n_experts, rpn, groups_m,
         pAcl, mAcl, grAcl, uAcl, cAcl, &workspaceSize, &executor);
     TORCH_CHECK(ret == ACL_SUCCESS,
                 "aclnnTerraceK2PackGetWorkspaceSize failed: ", ret,
-                " (host tiling 拒绝了这个几何? 见 op_host/terrace_k2_pack.cpp)");
+                " (did host tiling reject this geometry? see "
+                "op_host/terrace_k2_pack.cpp)");
 
     at::Tensor workspace;
     void *workspacePtr = nullptr;
@@ -177,9 +198,12 @@ K2Out k2_pack_meta(const at::Tensor &hidden, const at::Tensor &expert_idx,
 
 }  // namespace
 
-// FRAGMENT,不是 TORCH_LIBRARY:terrace 命名空间的唯一定义权在 terrace_ops.cpp,
-// 这里只追加。autograd 由 Python 侧 autograd.Function 承担(内部嫁接记录(未随仓发布)),
-// 不注册 Autograd key —— K2 反向走组合链,kernel 只出现在 forward(路线图拍板)。
+// FRAGMENT, not TORCH_LIBRARY: sole definition rights over the terrace
+// namespace belong to terrace_ops.cpp; this file only appends. autograd is
+// carried by the Python-side autograd.Function (internal grafting notes, not
+// published with this repo); no Autograd key is registered -- the K2 backward
+// takes the composite chain, the kernel appears in forward only (roadmap
+// decision).
 TORCH_LIBRARY_FRAGMENT(terrace, m)
 {
     m.def("k2_pack(Tensor hidden, Tensor expert_idx, Tensor gates, int world, "

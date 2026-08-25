@@ -1,4 +1,4 @@
-"""T-Route: terraced group-quota routing(设计见 docs/01-troute-design.md).
+"""T-Route: terraced group-quota routing (design notes: docs/01-troute-design.md).
 
 Selection uses bias-corrected affinities (aux-loss-free balancing); gate values
 use raw affinities. Structural guarantees, per token:
@@ -59,8 +59,8 @@ def t_route(
     # Explicit whitelist. The dispatch below ends in a bare `else` for "full", so before
     # this check any misspelling -- 'Full', 'quota', '', None -- fell through and silently
     # ran full T-Route. Four ablation arms silently collapsing into one identical arm is
-    # the exact signature of the 2026-07-x vendor-branch incident (内部工程记录:48 arms
-    # of a false-positive quality gate), and a typo in a launch script must be a crash, not a fifth
+    # the exact signature of the 2026-07-x vendor-branch incident (internal engineering
+    # records: 48 arms of a false-positive quality gate), and a typo in a launch script must be a crash, not a fifth
     # unnamed mode.
     _MODES = ("full", "group_limited", "quota_only", "global_topk")
     if mode not in _MODES:

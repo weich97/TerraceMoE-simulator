@@ -1,48 +1,60 @@
 #!/usr/bin/env python3
-"""**真正的单边**:用 CANN aclshmem 的 kernel 内单边写,对集合 a2a。
+"""**True one-sided**: in-kernel one-sided writes via CANN aclshmem, against collective a2a.
 
-为什么普通手段测不了单边(先说量具,再说测什么):
+Why ordinary means cannot measure one-sided (instrument first, then what we measure):
 
-  · PyTorch 的跨设备 `tensor.copy_()` 每次调用约 257-268 µs 的固定开销,
-    盖过一切:载荷从 4 MB 涨到 40 MB 耗时纹丝不动,报出来的"带宽"只是
-    「字节 ÷ 常数」。用它给单边下的任何结论都是废数 —— 我们撤回过一整组这样的表。
-  · hyper-parallel 的 `put_mem` 走的是另一条路:拿当前流直接发一个 AscendC kernel,
-    **没有 aclnn、没有 host tiling,offset/size/target_pe 全以 device 指针传入,
-    host 一次都不回读**;kernel 内 `aclshmem_ptr(target, pe)` 拿到远端可直接寻址的
-    GM 指针,MTE 走 GM→UB→远端 GM。这正是 `copy_()` 那 257 µs 里没有的东西。
-  · 对照的靶子要先立住:对齐尺寸(4096 B 整数倍)下,本机节点内集合 a2a
-    实测 ~104 GB/s,单 die 聚合出口物理值 122.4(docs/05)—— a2a 已吃到 ~85%。
-
-------------------------------------------------------------------------------
-判据(跑之前写死,不许事后改)
-
-  **上限本身就只有 ~15%。** a2a 已在聚合出口物理值的 ~85%,任何节点内传输
-  方式的理论上限就是那剩下的 ~15 个百分点。所以:
-
-    单边 ≥ 1.15 × a2a(在 ≥2 个对齐尺寸档上)  -> 单边确实能吃到线速,值得往下做
-    否则                                       -> 单边这条路关闭
-
-  1.15 不是拍的:它等价于"从 85% 打到 100% 线速"。低于它就说明单边换的是协议开销,
-  而协议开销在这台机器上已经不是瓶颈。
-
-  **量具地板**:本发量的是**带宽**,地板是 launch 开销,两者是不同的量,
-  地板闸才成立。任一档耗时不到地板 3 倍 -> 该档作废。(反例:若量的就是固定
-  开销本身,地板等于信号,这道闸永远红 —— 同一个手法要看量的是什么。)
+  · PyTorch's cross-device `tensor.copy_()` carries a fixed ~257-268 µs overhead per
+    call, which swamps everything: growing the payload from 4 MB to 40 MB does not move
+    the time at all, and the reported "bandwidth" is just bytes ÷ a constant. Any
+    conclusion about one-sided drawn with it is a dead number -- we have retracted a
+    whole set of such tables before.
+  · hyper-parallel's `put_mem` takes a different path: it launches an AscendC kernel
+    directly on the current stream, **no aclnn, no host tiling; offset/size/target_pe
+    are all passed as device pointers and the host never reads them back**; inside the
+    kernel, `aclshmem_ptr(target, pe)` yields a directly addressable remote GM pointer,
+    and MTE moves GM→UB→remote GM. That is exactly what `copy_()`'s 257 µs lacks.
+  · The control target has to stand first: at aligned sizes (multiples of 4096 B),
+    intra-node collective a2a measures ~104 GB/s on this machine, against a single-die
+    aggregate egress physical value of 122.4 (docs/05) -- a2a already takes ~85%.
 
 ------------------------------------------------------------------------------
-为什么不 import hyper_parallel
+Criterion (written down before the run; no after-the-fact edits)
 
-顶层 `hyper_parallel/__init__.py` 会 import DTensor / FSDP / PP / CP 一整套,
-并**无条件** `override_functions()` 打 `BackwardHookFunction` 的 monkey patch。
-与训练框架同进程共存的风险全在那里。
-`platform/torch/symmetric_memory/symmetric_memory.py:29-35` 自己就演示了怎么绕:
-直接 `torch.ops.load_library` + `torch.classes.SymmetricMemory.Manager/Ops`。
+  **The ceiling itself is only ~15%.** a2a is already at ~85% of the aggregate egress
+  physical value, so the theoretical ceiling for any intra-node transport is those
+  remaining ~15 percentage points. Therefore:
 
-**顺带**:`attr_init` 里写死的 `tcp://127.0.0.1:8662` 对本发不构成问题 ——
-Hop B 就是节点内 8 die,全在同一台主机上,本机地址正好够用。跨节点才需要改,
-而 C++ 侧 `attr_init` 本来就收地址参数(README 那条"硬编码"只在 Python 封装里)。
+    one-sided ≥ 1.15 × a2a (on ≥2 aligned size tiers)  -> one-sided really reaches line rate; worth pursuing
+    otherwise                                          -> the one-sided route is closed
 
-用法(单节点 8 die):
+  1.15 is not pulled from thin air: it is equivalent to "going from 85% to 100% of
+  line rate". Below it, one-sided is merely trading away protocol overhead, and
+  protocol overhead is not the bottleneck on this machine.
+
+  **Instrument floor**: this run measures **bandwidth**, and the floor is launch
+  overhead; the two are different quantities, which is what makes the floor gate
+  valid. Any tier whose time is under 3x the floor -> that tier is voided.
+  (Counterexample: were the thing measured the fixed overhead itself, the floor would
+  equal the signal and this gate would stay red forever -- the same trick depends on
+  what is being measured.)
+
+------------------------------------------------------------------------------
+Why we do not import hyper_parallel
+
+The top-level `hyper_parallel/__init__.py` imports the whole DTensor / FSDP / PP / CP
+stack and **unconditionally** runs `override_functions()`, monkey-patching
+`BackwardHookFunction`. All the risk of coexisting in-process with a training
+framework lives there.
+`platform/torch/symmetric_memory/symmetric_memory.py:29-35` itself demonstrates the
+bypass: plain `torch.ops.load_library` + `torch.classes.SymmetricMemory.Manager/Ops`.
+
+**Aside**: the `tcp://127.0.0.1:8662` hard-coded in `attr_init` is not a problem for
+this run -- Hop B is intra-node 8 dies, all on one host, so the loopback address is
+exactly enough. Only cross-node needs a change, and the C++ side `attr_init` takes an
+address parameter anyway (the README's "hard-coded" claim applies only to the Python
+wrapper).
+
+Usage (single node, 8 dies):
   torchrun --nnodes=1 --nproc_per_node=8 tools/onesided/bench_onesided.py --out onesided.json
 """
 from __future__ import annotations
@@ -57,18 +69,19 @@ import torch.distributed as dist
 
 try:
     import torch_npu  # noqa: F401
-except Exception as exc:                       # pragma: no cover - 只在集群上跑
-    raise SystemExit("需要 torch_npu:%s" % exc)
+except Exception as exc:                       # pragma: no cover - only runs on the cluster
+    raise SystemExit("torch_npu required: %s" % exc)
 
-H = 2048                 # 判决床隐藏维;每行 H*2 = 4096 B
+H = 2048                 # verdict-testbed hidden dim; each row is H*2 = 4096 B
 _MGR = _OPS = None
 
 
 def _load(lib: str):
-    """加载 libaclshmem_torch.so 并拿到两个 TorchScript 类。
+    """Load libaclshmem_torch.so and grab the two TorchScript classes.
 
-    路径优先级:显式 --lib > TERRACE_SHMEM_LIB > 装好的 wheel 里那份。
-    找不到就**大声退出**,不做静默降级 —— 降级会把"没测到"伪装成"测到了很慢"。
+    Path priority: explicit --lib > TERRACE_SHMEM_LIB > the copy inside the installed wheel.
+    If none is found, **exit loudly** -- no silent fallback, because a fallback would
+    disguise "did not measure" as "measured, and it was slow".
     """
     global _MGR, _OPS
     cands = [lib] if lib else []
@@ -88,13 +101,13 @@ def _load(lib: str):
             _OPS = torch.classes.SymmetricMemory.Ops()
             return c
     raise SystemExit(
-        "找不到 libaclshmem_torch.so。试过:%s\n"
-        "先按 tools/onesided/build_shmem.sh 编译(离线集群需预放 gitcode.com/cann/shmem v1.3.0)。"
+        "libaclshmem_torch.so not found. Tried: %s\n"
+        "Build it first per tools/onesided/build_shmem.sh (offline clusters must pre-stage gitcode.com/cann/shmem v1.3.0)."
         % cands)
 
 
 def timed(fn, iters=10) -> float:
-    """与本仓其余微基准同口径:3 次热身丢弃 + iters 次取均值。"""
+    """Same convention as every other microbenchmark in this repo: 3 discarded warmups + mean over iters."""
     for _ in range(3):
         fn()
     torch.npu.synchronize()
@@ -108,11 +121,13 @@ def timed(fn, iters=10) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    # 尺寸取 H 的整数倍 -> 每对端字节数是 4096 B 的整数倍,与真实 Hop B 同形。
-    # 不对齐会掉进 2 进制阶造成的假锯齿(实现行为),测的是对齐效应不是传输方式。
+    # Sizes are integer multiples of H -> bytes per peer are integer multiples of 4096 B,
+    # same shape as the real Hop B. Unaligned sizes fall into the fake sawtooth caused by
+    # power-of-two steps (implementation behavior): that measures alignment effects, not
+    # the transport.
     ap.add_argument("--rows", type=int, nargs="+",
                     default=[512, 1024, 1536, 2048, 3072, 4096, 6144],
-                    help="每对端行数(1 行 = H*2 = 4096 B);512 行 = 2 MB")
+                    help="rows per peer (1 row = H*2 = 4096 B); 512 rows = 2 MB")
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--lib", default="")
@@ -126,57 +141,63 @@ def main() -> None:
     torch.npu.set_device(rank % 8)
     lib = _load(args.lib)
     _MGR.attr_init(rank, world, args.heap_mb * 1024 * 1024, "tcp://127.0.0.1:8662")
-    # hyper-parallel 官方 shmem_alltoall 形态用的每对端一条流
+    # the official hyper-parallel shmem_alltoall form uses one stream per peer
     streams = [torch.npu.Stream() for _ in range(world)]
     if rank == 0:
-        print("[onesided] 加载 %s;world=%d heap=%d MB" % (lib, world, args.heap_mb), flush=True)
+        print("[onesided] loaded %s; world=%d heap=%d MB" % (lib, world, args.heap_mb), flush=True)
 
     dt = torch.bfloat16
 
     def T(x, d=torch.int64):
         return torch.tensor([x], dtype=d, device="npu")
 
-    # **offset/size 的 tensor 提到循环外。** 审计发现参考实现每次调用现建 3-5 个
-    # `torch.tensor([x], device='npu')` —— 每发一次 put 就多几次 H2D 小分配,
-    # 那正是我们要打败的那类开销。
+    # **offset/size tensors hoisted out of the loop.** An audit found the reference
+    # implementation building 3-5 fresh `torch.tensor([x], device='npu')` per call --
+    # each put issued costs a few extra small H2D allocations, exactly the class of
+    # overhead we are trying to beat.
     zero, one_i32 = T(0), T(1, torch.int32)
 
     recs, floor = [], [None]
     for rows in args.rows:
         n_elem = rows * H
         per_peer_mb = n_elem * 2 / 1e6
-        # 对称内存:发送区(每对端一份)与接收区(每对端一份)
+        # Symmetric memory: send region (one slice per peer) and recv region (one slice per peer)
         send = _MGR.malloc([world * n_elem], dt)
         recv = _MGR.malloc([world * n_elem], dt)
         torch.fill_(send, 1.0)
         sig = _MGR.malloc([1], torch.int32)
         torch.zero_(sig)
-        offs = [T(p * n_elem) for p in range(world)]      # 也提到循环外
+        offs = [T(p * n_elem) for p in range(world)]      # also hoisted out of the loop
         size_t = T(n_elem)
         dist.barrier()
 
         def run_onesided():
-            # 异或蝶形:第 r 轮与 r^rank 交换。每轮每 die 恰好一进一出,按构造无竞争
-            # —— 经典无竞争 p2p 调度形态。
+            # XOR butterfly: in round r, exchange with r^rank. Each round, every die has
+            # exactly one in and one out -- contention-free by construction, the classic
+            # contention-free p2p schedule.
             for r in range(1, world):
                 pe = rank ^ r
                 _OPS.put_mem(recv, offs[rank], send, offs[pe], size_t, pe)
             torch.npu.synchronize()
 
-        # 对照臂:同样载荷的集合 a2a(同机实测在这些尺寸上 ~76-104 GB/s)
+        # Control arm: collective a2a with the same payload (measured ~76-104 GB/s on this
+        # machine at these sizes)
         sv = torch.ones(world * n_elem, dtype=dt, device="npu")
         rv = torch.empty_like(sv)
 
         def run_a2a():
             dist.all_to_all_single(rv, sv)
 
-        # 第三臂:官方 shmem_alltoall 形态(每对端一条流 + put_mem_signal +
-        # signal_wait_until)。蝶形臂每轮只占一条链路,天生吃不到链路并行;
-        # 这一臂是该库生产在用的并行形态 —— **不用最强合法实现测过,没资格下结论**。
-        # 完成检测用 signal 累计计数(op=1 是加),免每轮清零、免 host 同步;
-        # sig 每个尺寸档新分配清零,n_calls 同步归零,口径自洽。
+        # Third arm: the official shmem_alltoall form (one stream per peer + put_mem_signal +
+        # signal_wait_until). The butterfly arm occupies only one link per round and by
+        # construction cannot exploit link parallelism; this arm is the parallel form the
+        # library actually runs in production -- **no verdict is allowed before measuring the
+        # strongest legitimate implementation**.
+        # Completion detection uses a cumulative signal count (op=1 is add): no per-round
+        # reset, no host sync; sig is freshly allocated and zeroed per size tier and n_calls
+        # resets with it, so the bookkeeping stays self-consistent.
         n_calls = [0]
-        expect_t = T(-1, torch.int32)   # 首次 add_(world) 后 = world-1,即 GT 阈值
+        expect_t = T(-1, torch.int32)   # after the first add_(world) it equals world-1, i.e. the GT threshold
 
         def run_official():
             for pe in range(world):
@@ -184,19 +205,23 @@ def main() -> None:
                     _OPS.put_mem_signal(recv, offs[rank], send, offs[pe], size_t,
                                         sig, zero, one_i32, 1, pe)
             n_calls[0] += 1
-            # compare_op 只有 0=EQ/1=GT/2=LT(kernel 源码),没有 GE。
-            # 用 EQ 会死:快的 rank 先进下一轮,把 +1 打进我的 sig,精确等于的
-            # 窗口被冲过头 -> 永久自旋(实测:全 rank 设备同步超时挂在这)。
-            # GT + (8k-1) 等价于 GE 8k,单调递增计数下免疫冲过头。
-            # 阈值 tensor 设备侧原位递增(expect_t 由外层预建),不在热路径
-            # 现建 tensor —— 与 offs/size_t 同一条纪律。
+            # compare_op offers only 0=EQ/1=GT/2=LT (kernel source); there is no GE.
+            # EQ is fatal: a fast rank enters the next round early and lands its +1 in my
+            # sig, the exact-equality window gets overshot -> permanent spin (observed: all
+            # ranks hang here on device sync timeout).
+            # GT + (8k-1) is equivalent to GE 8k, immune to overshoot under a monotonically
+            # increasing counter.
+            # The threshold tensor is incremented in place on device (expect_t prebuilt in
+            # the outer scope); no tensors built on the hot path -- same discipline as
+            # offs/size_t.
             expect_t.add_(world)
             _OPS.signal_wait_until(recv, sig, zero, expect_t, 1)
             torch.npu.synchronize()
 
-        # **量具地板**:同样 world-1 次 put,每次 1 个元素。这里量的是带宽,
-        # 地板是 launch 开销,两者是不同的量 —— 所以这道闸在本发是对的
-        # (若量的就是固定开销本身,同一道闸永远红)。
+        # **Instrument floor**: the same world-1 puts, 1 element each. This run measures
+        # bandwidth while the floor is launch overhead; the two are different quantities --
+        # which is why this gate is right for this run (were the measurement the fixed
+        # overhead itself, the same gate would stay red forever).
         if floor[0] is None:
             s1, r1 = _MGR.malloc([world], dt), _MGR.malloc([world], dt)
             o1, z1 = [T(p) for p in range(world)], T(1)
@@ -214,7 +239,7 @@ def main() -> None:
         to = sorted(timed(run_onesided, args.iters) for _ in range(args.reps))[args.reps // 2]
         ta = sorted(timed(run_a2a, args.iters) for _ in range(args.reps))[args.reps // 2]
         tf2 = sorted(timed(run_official, args.iters) for _ in range(args.reps))[args.reps // 2]
-        nbytes = (world - 1) * n_elem * 2          # 本 die 实际搬出的字节
+        nbytes = (world - 1) * n_elem * 2          # bytes this die actually moves out
         rec = {"rows": rows, "per_peer_mb": per_peer_mb,
                "onesided_ms": to * 1e3, "a2a_ms": ta * 1e3,
                "onesided_gbps": nbytes / to / 1e9,
@@ -227,8 +252,8 @@ def main() -> None:
                "official_over_floor": (tf2 * 1e3) / floor[0] if floor[0] else 0.0}
         recs.append(rec)
         if rank == 0:
-            print("%5d 行 (%6.2f MB/对端)  蝶形 %6.1f  官方 %6.1f  a2a %6.1f GB/s"
-                  "  -> 蝶形 **%.2f×** 官方 **%.2f×**  (地板 %.1f×/%.1f×)"
+            print("%5d rows (%6.2f MB/peer)  butterfly %6.1f  official %6.1f  a2a %6.1f GB/s"
+                  "  -> butterfly **%.2f×** official **%.2f×**  (floor %.1f×/%.1f×)"
                   % (rows, per_peer_mb, rec["onesided_gbps"], rec["official_gbps"],
                      rec["a2a_gbps"], rec["ratio"], rec["ratio_official"],
                      rec["over_floor"], rec["official_over_floor"]), flush=True)
@@ -251,32 +276,32 @@ def main() -> None:
     voided = [r["rows"] for r in recs if r["best_ratio"] is None]
     if voided:
         print(flush=True)
-        print("!! 以下档耗时不到量具地板(%.3f ms)的 3 倍,**读数不作数**:%s"
+        print("!! The following tiers ran under 3x the instrument floor (%.3f ms); **readings do not count**: %s"
               % (floor[0], voided), flush=True)
     live = [r for r in recs if r["best_ratio"] is not None]
 
     print(flush=True)
     wins = [r for r in live if r["best_ratio"] >= 1.15]
     if len(live) < 3:
-        out["verdict"] = "INVALID:有效档不足 3 个"
-        print("!! 有效档只有 %d 个,**不出判据**。" % len(live), flush=True)
+        out["verdict"] = "INVALID: fewer than 3 valid tiers"
+        print("!! Only %d valid tiers -- **no verdict issued**." % len(live), flush=True)
     elif len(wins) >= 2:
-        out["verdict"] = "单边能吃到线速,值得往下做"
-        print("**单边在 %d 个档上 ≥1.15× a2a** -> %s" % (len(wins), out["verdict"]), flush=True)
-        print("   最好的一档:%.2f× @ %.2f MB/对端"
+        out["verdict"] = "one-sided reaches line rate; worth pursuing"
+        print("**one-sided ≥1.15× a2a on %d tiers** -> %s" % (len(wins), out["verdict"]), flush=True)
+        print("   best tier: %.2f× @ %.2f MB/peer"
               % (max(w["best_ratio"] for w in wins),
                  max(wins, key=lambda w: w["best_ratio"])["per_peer_mb"]), flush=True)
     else:
-        out["verdict"] = "单边这条路关闭(本机)"
+        out["verdict"] = "the one-sided route is closed (on this machine)"
         best = max(live, key=lambda r: r["best_ratio"])
-        print("单边(两种实现取优)最好只有 **%.2f×**(@ %.2f MB/对端),达不到 1.15 -> **%s**"
+        print("one-sided (best of both implementations) tops out at **%.2f×** (@ %.2f MB/peer), short of 1.15 -> **%s**"
               % (best["best_ratio"], best["per_peer_mb"], out["verdict"]), flush=True)
-        print("   理由:a2a 已在聚合出口物理值的 ~85%%,上限本就只有 ~15 个点;", flush=True)
-        print("   单边换的是协议开销,而协议开销在这台机器上不是瓶颈。", flush=True)
+        print("   Reason: a2a is already at ~85%% of the aggregate egress physical value; the ceiling was only ~15 points to begin with;", flush=True)
+        print("   one-sided trades away protocol overhead, and protocol overhead is not the bottleneck on this machine.", flush=True)
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False, indent=1)
-    print("写出 %s" % os.path.abspath(args.out), flush=True)
+    print("wrote %s" % os.path.abspath(args.out), flush=True)
     dist.destroy_process_group()
 
 

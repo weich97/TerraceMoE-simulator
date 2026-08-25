@@ -127,7 +127,7 @@ def test_strict_group_balance_holds_only_when_M_equals_Ng():
     """quota_only (M == N_g) IS strict: every token must touch every group.
 
     This is MoGE's actual guarantee and the reason quota_only measures group_cv
-    exactly 0.0000 on the real 参考工作点 arms while full measures 0.064.
+    exactly 0.0000 on the real reference-operating-point arms while full measures 0.064.
     """
     n_tok, e, n_g = 2048, 128, 8
     cfg = TRouteConfig(n_experts=e, n_groups=n_g, top_k=8, top_groups=n_g)

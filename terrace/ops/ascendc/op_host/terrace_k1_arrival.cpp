@@ -1,46 +1,52 @@
 /**
- * terrace_k1_arrival -- host 侧:tiling + InferShape/InferDataType + 算子原型。
+ * terrace_k1_arrival -- host side: tiling + InferShape/InferDataType + op prototype.
  *
- * K1(到达侧融合链)的三个坑位,build.sh 会用本文件覆盖 msopgen 骨架里的同名
- * stub。功能规格与两遍法论证见 op_kernel/terrace_k1_arrival.cpp 文件头。
+ * The three slots for K1 (the arrival-side fused chain); build.sh overwrites the
+ * same-named stubs in the msopgen skeleton with this file. Functional spec and
+ * the two-pass argument live in the op_kernel/terrace_k1_arrival.cpp file header.
  *
- * 形状契约(等配额快路径全形状静态 —— K1 免主机同步的本钱):
+ * Shape contract (every shape is static on the equal-quota fast path -- this is
+ * what buys K1 its freedom from host synchronization):
  *   rx [R, H], rslot [R, quota], rgate [R, quota]
  *   -> send_buf [R*quota, H], gate_pairs [R*quota],
  *      r_idx [R*quota], slot_idx [R*quota], i_send [rpn]
  */
-// tiling 结构体住在 op_kernel/(host/kernel 共享,CANN 9.0.0 ASC 体系)。
+// The tiling struct lives in op_kernel/ (shared by host and kernel, CANN 9.0.0
+// ASC layout).
 #include "../op_kernel/terrace_k1_arrival_tiling.h"
 #include "register/op_def_registry.h"
 #include "tiling/platform/platform_ascendc.h"
 
 namespace optiling {
 
-// rslot staging 的每块配对数:4 的倍数(int32 视图下 4 配对 = 32B 对齐),
-// 2048 配对 = 16KB UB。载荷行 tile 上限 8192 元素(bf16 16KB x double buffer)。
-// UB 总账(2026-08-24 起 CopyRow 用两条队列):rowQueue 8192x2Bx2 = 32KB
-// + rowOutQueue 同 32KB + slotStage 16KB = **80KB**,UB 192KB,余量充足。
-// 第二条队列不是可选的:少了它 MTE2->MTE3 没有屏障,搬出去的是脏数据。
+// Pairs per chunk for rslot staging: multiple of 4 (4 pairs = 32B aligned under
+// the int32 view), 2048 pairs = 16KB UB. Payload-row tile capped at 8192
+// elements (bf16 16KB x double buffer).
+// UB budget (CopyRow uses two queues since 2026-08-24): rowQueue 8192x2Bx2 = 32KB
+// + rowOutQueue another 32KB + slotStage 16KB = **80KB**; UB is 192KB, plenty of
+// headroom. The second queue is not optional: without it there is no
+// MTE2->MTE3 barrier and the copy-out ships dirty data.
 constexpr uint32_t SLOT_CHUNK = 2048;
 constexpr uint32_t ROW_TILE_MAX = 8192;
 constexpr uint32_t ALIGN_BYTES = 32;
-constexpr uint32_t MAX_RPN = 64;      // kernel 桶数组上限(slots <= 63 的现链硬约束)
+constexpr uint32_t MAX_RPN = 64;      // kernel bucket-array cap (hard bound of the current chain: slots <= 63)
 
 static ge::graphStatus TilingFunc(gert::TilingContext *context)
 {
-    // GetTilingData<T>() 返回指向 tiling buffer 的 T*,并顺带 SetDataSize(sizeof(T))。
+    // GetTilingData<T>() returns a T* into the tiling buffer and calls
+    // SetDataSize(sizeof(T)) as a side effect.
     TerraceK1ArrivalTilingData *tiling =
         context->GetTilingData<TerraceK1ArrivalTilingData>();
     if (tiling == nullptr) {
         return ge::GRAPH_FAILED;
     }
     auto platform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    uint32_t aivNum = platform.GetCoreNumAiv();   // 910C 实测为准(构建脚本 ascendc/build.sh 的头注)
+    uint32_t aivNum = platform.GetCoreNumAiv();   // trust the 910C measured value (header comment of the build script ascendc/build.sh)
     if (aivNum == 0) {
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 输入形状 ----
+    // ---- input shapes ----
     const gert::StorageShape *rxShape = context->GetInputShape(0);
     const gert::StorageShape *rslotShape = context->GetInputShape(1);
     const gert::StorageShape *rgateShape = context->GetInputShape(2);
@@ -61,7 +67,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 属性 ----
+    // ---- attributes ----
     const gert::RuntimeAttrs *attrs = context->GetAttrs();
     if (attrs == nullptr) {
         return ge::GRAPH_FAILED;
@@ -74,23 +80,26 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         myLocal == nullptr) {
         return ge::GRAPH_FAILED;
     }
-    // fail loud:属性与张量几何必须自洽(quota 即 rslot 第 1 维;桶数组上限)。
+    // fail loud: attributes must be consistent with the tensor geometry (quota
+    // is rslot dim 1; bucket-array cap).
     if (*quota != Q || *epr <= 0 || *rpn <= 0 || *rpn > MAX_RPN ||
         (*epr) * (*rpn) > 63 || *myLocal < 0 || *myLocal >= *rpn) {
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 载荷行对齐:H*esize 必须 32B 整除(真实 hidden 2048/7168 恒真)----
+    // ---- payload-row alignment: H*esize must be divisible by 32B (always true
+    // for the real hidden sizes 2048/7168) ----
     int64_t esizeRaw = ge::GetSizeByDataType(context->GetInputDesc(0)->GetDataType());
     if (esizeRaw <= 0) {
         return ge::GRAPH_FAILED;
     }
     uint32_t esize = static_cast<uint32_t>(esizeRaw);
     if ((static_cast<uint64_t>(H) * esize) % ALIGN_BYTES != 0) {
-        return ge::GRAPH_FAILED;   // fail loud;torch 侧 csrc 先行拦截并给人话报错
+        return ge::GRAPH_FAILED;   // fail loud; the torch-side csrc intercepts first with a human-readable error
     }
 
-    // ---- 切核:配对连续均分(稳定序的核间前提,见 kernel 文件头论证)----
+    // ---- core split: pairs divided contiguously and evenly (the inter-core
+    // prerequisite for stable ordering, see the kernel file-header argument) ----
     uint64_t P64 = static_cast<uint64_t>(R) * static_cast<uint64_t>(Q);
     if (P64 > 0xFFFFFFFFull) {
         return ge::GRAPH_FAILED;
@@ -102,8 +111,9 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
     }
     context->SetBlockDim(usedCores);
 
-    // rowTile:<= ROW_TILE_MAX 且保持 32B 对齐(H 已对齐,故 min 即可;当
-    // H > ROW_TILE_MAX 时 ROW_TILE_MAX 的 8192 元素对 2/4 字节 dtype 恒对齐)。
+    // rowTile: <= ROW_TILE_MAX while keeping 32B alignment (H is already
+    // aligned, so min suffices; when H > ROW_TILE_MAX, the 8192 elements of
+    // ROW_TILE_MAX stay aligned for 2/4-byte dtypes).
     uint32_t rowTile = (H < static_cast<int64_t>(ROW_TILE_MAX))
                            ? static_cast<uint32_t>(H) : ROW_TILE_MAX;
 
@@ -119,7 +129,8 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
     tiling->slotChunk = SLOT_CHUNK;
     tiling->rowTile = rowTile;
 
-    // 游标法零核间同步,无自定义 workspace;系统 workspace 照样板保留。
+    // Cursor method, zero inter-core synchronization, no custom workspace; the
+    // system workspace stays as in the template.
     size_t *currentWorkspace = context->GetWorkspaceSizes(1);
     currentWorkspace[0] = platform.GetLibApiWorkSpaceSize();
     return ge::GRAPH_SUCCESS;
@@ -181,9 +192,10 @@ class TerraceK1Arrival : public OpDef {
 public:
     explicit TerraceK1Arrival(const char *name) : OpDef(name)
     {
-        // dtype 组合按位置对应:bf16 主线,fp16/fp32 陪跑(与 passthrough 同策)。
-        // rslot 是 int64 **存储**平面 —— kernel 内以 int32 对标量访问,不发 int64
-        // 向量指令(910C 边界,见 kernel 文件头)。
+        // dtype combos correspond by position: bf16 is the main line, fp16/fp32
+        // ride along (same policy as passthrough). rslot is an int64 **storage**
+        // plane -- the kernel accesses it as int32 scalars and issues no int64
+        // vector instructions (910C boundary, see the kernel file header).
         this->Input("rx")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16, ge::DT_BF16, ge::DT_FLOAT})
@@ -231,8 +243,10 @@ public:
 
         this->SetInferShape(ge::InferShape).SetInferDataType(ge::InferDataType);
 
-        // soc 串占位与 passthrough 同策:build.sh 从骨架 stub 抓权威值替换,
-        // 替换后回读校验(占位符残留即停)。910C/CANN 9.0.0 实测值 ascend910_93。
+        // The soc string placeholder follows the passthrough policy: build.sh
+        // grabs the authoritative value from the skeleton stub and substitutes
+        // it, then reads it back to verify (a leftover placeholder stops the
+        // build). Measured value on 910C/CANN 9.0.0: ascend910_93.
         this->AICore().SetTiling(optiling::TilingFunc).AddConfig("__TERRACE_SOC__");
     }
 };

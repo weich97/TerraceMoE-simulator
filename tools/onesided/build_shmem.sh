@@ -1,76 +1,81 @@
 #!/bin/bash
-# 编译 HyperParallel 的单边通信(Symmetric Memory)—— 只编这一块,不装框架。
+# Build HyperParallel's one-sided communication (Symmetric Memory) -- just this piece, without installing the framework.
 #
-# 为什么:PyTorch 跨设备 `tensor.copy_()` 每次调用约 257-268 µs 固定开销,
-# 用它测单边带宽得到的只是「字节 ÷ 常数」—— 不是测量。aclshmem 的 `put_mem`
-# 走另一条路:直接发 AscendC kernel,没有 aclnn、没有 host tiling,
-# kernel 内拿远端 GM 指针 MTE 直搬。这才是能测单边的量具。
+# Why: PyTorch's cross-device `tensor.copy_()` carries a fixed ~257-268 µs overhead per
+# call; "bandwidth" measured with it is just bytes ÷ a constant -- not a measurement.
+# aclshmem's `put_mem` takes a different path: it launches an AscendC kernel directly,
+# no aclnn, no host tiling; the kernel grabs a remote GM pointer and MTE moves the data
+# directly. That is the instrument that can actually measure one-sided.
 #
-# 用法(先 source CANN set_env.sh 与你的 python 环境):
+# Usage (source CANN's set_env.sh and your python environment first):
 #   bash tools/onesided/build_shmem.sh /path/to/hyper-parallel-master
 #
-# 前置(在我们的验证机上确认过的组合):
-#   gcc ∈ [7.3.0, 11.3.0];cmake ≥ 3.18;bisheng 在 $ASCEND_HOME_PATH/bin;
-#   torch 2.9(hyper-parallel [torch] extra 的默认档)
-#   **离线集群注意**:3rdparty/shmem 必须预先放好(见下),自动 clone 需要外网
+# Prerequisites (combination confirmed on our validation machine):
+#   gcc ∈ [7.3.0, 11.3.0]; cmake ≥ 3.18; bisheng under $ASCEND_HOME_PATH/bin;
+#   torch 2.9 (the default tier of hyper-parallel's [torch] extra)
+#   **Offline clusters**: 3rdparty/shmem must be pre-staged (see below); the automatic clone needs internet access
 set -eu
 
 HP="${1:-}"
-[ -n "$HP" ] && [ -d "$HP" ] || { echo "用法: bash $0 /path/to/hyper-parallel-master" >&2; exit 2; }
+[ -n "$HP" ] && [ -d "$HP" ] || { echo "usage: bash $0 /path/to/hyper-parallel-master" >&2; exit 2; }
 HP=$(cd "$HP" && pwd)
 say(){ echo "[build_shmem] $*"; }
 
-# 前置:调用方自己 source CANN 环境(set_env.sh)与 python 环境;
-# 本脚本只查不设 —— 环境是机器的事,不是脚本的事。
+# Prerequisite: the caller sources the CANN environment (set_env.sh) and the python
+# environment themselves; this script only checks, never sets -- the environment belongs
+# to the machine, not to the script.
 
-# ---------------------------------------------------------------- 前置检查
-say "前置检查"
+# ---------------------------------------------------------------- preflight checks
+say "preflight checks"
 gv=$(gcc -dumpfullversion 2>/dev/null || gcc -dumpversion)
 case "$gv" in
   7.3.*|8.*|9.*|10.*|11.0.*|11.1.*|11.2.*|11.3.*) say "  gcc $gv OK" ;;
-  *) echo "!! gcc $gv 不在 [7.3.0, 11.3.0]" >&2; exit 3 ;;
+  *) echo "!! gcc $gv outside [7.3.0, 11.3.0]" >&2; exit 3 ;;
 esac
-command -v cmake >/dev/null || { echo "!! 没有 cmake" >&2; exit 3; }
+command -v cmake >/dev/null || { echo "!! cmake not found" >&2; exit 3; }
 say "  cmake $(cmake --version | head -1 | awk '{print $3}')"
 BISHENG="${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}/bin/bisheng"
 [ -x "$BISHENG" ] || command -v bisheng >/dev/null \
-  || { echo "!! 找不到 bisheng(试过 $BISHENG)" >&2; exit 3; }
+  || { echo "!! bisheng not found (tried $BISHENG)" >&2; exit 3; }
 say "  bisheng OK"
 export PATH="$(dirname "$BISHENG"):$PATH"
 
-# **离线依赖**:build_symmetric_memory.sh:272 是
+# **Offline dependency**: build_symmetric_memory.sh:272 reads
 #     [[ ! -d "shmem" ]] && git clone --depth 1 https://gitcode.com/cann/shmem.git -b v1.3.0
-# 目录已存在就跳过克隆 —— 这是唯一能在无外网集群上走通的路。
+# An existing directory skips the clone -- the only path that works on a cluster with no
+# internet access.
 if [ ! -d "$HP/3rdparty/shmem" ]; then
   cat >&2 <<'MSG'
-!! 缺 3rdparty/shmem。
+!! 3rdparty/shmem is missing.
 
-   离线集群上自动 clone 走不通,需要把
-   https://gitcode.com/cann/shmem.git @ v1.3.0 离线搬进:
+   The automatic clone does not work on an offline cluster; move
+   https://gitcode.com/cann/shmem.git @ v1.3.0 in offline, to:
        <hyper-parallel-master>/3rdparty/shmem
-   目录一旦存在,build 脚本就会跳过 clone。
+   Once the directory exists, the build script skips the clone.
 
-   注意 CANN 9.0.0 里**没有** aclshmem(找到的 svm_shmem_* 是驱动内部的,不是这个),
-   仓库也不 vendor、无预编译包 —— 必须搬源码。
+   Note: CANN 9.0.0 ships **no** aclshmem (the svm_shmem_* symbols you may find are
+   driver-internal, not this), the repo does not vendor it, and there is no prebuilt
+   package -- the source must be moved in.
 MSG
   exit 4
 fi
-say "  3rdparty/shmem 在(离线依赖已就位)"
+say "  3rdparty/shmem present (offline dependency staged)"
 
-# ---------------------------------------------------------------- 两处补丁
-# 都是审计查出来的、会让读数作废的东西。**幂等**:改过就跳过。
+# ---------------------------------------------------------------- two patches
+# All found by audit; each one would void the readings. **Idempotent**: skip if already applied.
 cd "$HP"
 
 P1=hyper_parallel/core/symmetric_memory/ops/put_mem/host/put_mem.cpp
 if grep -q "TERRACE_PATCH_STATIC_SYNC_V3" "$P1" 2>/dev/null; then
-  say "补丁 1 已在(V2)"
+  say "patch 1 already in (V2)"
 else
-  # V2(2026-08-25)整文件替换。V1 的字符串手术打出两处坏账,作废:
-  #   (a) 错误路径裸 return(函数返回 int,编不过);
-  #   (b) replace(...,1) 把增长路径里自己插的 free 注释掉了,
-  #       尾部真正要删的 aclrtFree(UAF 根源)原样活着 —— 裸 return 一修反而成真 UAF。
-  # 教训:对 2 KB 的文件做字符串手术是拿确定性换省事。
-  say "补丁 1(V2 整文件替换):malloc/free 提出热路径"
+  # V2 (2026-08-25) replaces the whole file. V1's string surgery produced two bad debts; retracted:
+  #   (a) a bare return on the error path (the function returns int; does not compile);
+  #   (b) replace(...,1) commented out the free it had itself inserted on the growth path,
+  #       while the trailing aclrtFree that actually needed deleting (the UAF root cause)
+  #       stayed alive as-is -- fixing the bare return would have made it a real UAF.
+  # Lesson: string surgery on a 2 KB file trades determinism for convenience.
+  say "patch 1 (V2 whole-file replacement): hoist malloc/free out of the hot path"
   [ -f "$P1.orig" ] || cp "$P1" "$P1.orig"
   cat > "$P1" <<'CPPEOF'
 /**
@@ -96,20 +101,27 @@ extern void put_mem(uint32_t block_dim, void *stream, uint64_t elementSize, uint
                     uint8_t *src, uint8_t *src_offset, uint8_t *size, int64_t target_pe, bool non_blocking,
                     uint8_t *Syncmem);
 
-// TERRACE_PATCH_STATIC_SYNC_V3(2026-08-25):
-// 原版每次调用 aclrtMalloc + aclrtMemset + aclrtFree 一块 sync 区,
-// aclrtFree 通常隐含设备同步 —— 单这一条就足以作废整组带宽读数;
-// 且 kernel 里 SyncAll 用的正是这块被 free 掉的内存(UAF)。
-// 改法:缓冲静态复用、按需增长、增长时旧块不 free(可能仍有在飞 kernel 引用;
-// 增长只在 block_dim 变大时发生,泄漏上限 32B x 64 = 2 KB,可忽略)。
-// **清零保留但改流内异步(V3)**:原版 host 同步 memset 之所以安全,是因为每次
-// malloc 的是新缓冲;复用静态缓冲后,host memset 不排流序,会清掉上一发在飞
-// kernel 的 SyncAll flag -> 永久自旋(实测:连发 put 卡死 3/8 张卡,
-// 其余 rank 集合通信超时)。aclrtMemsetAsync 同流入队 = 严格排在上一发 kernel
-// 之后、下一发之前,host 全程不同步。
-// **约束**:静态缓冲按「单流使用」设计;多流并发 put 共享它仍会竞态(参考实现的
-// alltoall 是每对端一条流)。本量具单流,够用;多流要一流一缓冲,那是后话。
-// 错误路径不学原版的 aclFinalize()(库函数里拆全局运行时),直接返 -1。
+// TERRACE_PATCH_STATIC_SYNC_V3 (2026-08-25):
+// The original did aclrtMalloc + aclrtMemset + aclrtFree on a sync region every call;
+// aclrtFree usually implies a device synchronize -- that alone is enough to void the
+// whole set of bandwidth readings; and the kernel's SyncAll uses exactly the memory
+// that was freed (UAF).
+// Fix: reuse a static buffer, grow on demand, never free the old block on growth
+// (in-flight kernels may still reference it; growth only happens when block_dim
+// increases, leak bound 32B x 64 = 2 KB, negligible).
+// **Zeroing kept, but made in-stream async (V3)**: the original's host-synchronous
+// memset was only safe because every call malloc'd a fresh buffer; with a reused
+// static buffer, a host memset is not stream-ordered and wipes the SyncAll flag of
+// the previous in-flight kernel -> permanent spin (observed: back-to-back puts hang
+// 3/8 dies, the remaining ranks time out in collectives). aclrtMemsetAsync enqueued
+// on the same stream = strictly after the previous kernel and before the next one,
+// with the host never synchronizing.
+// **Constraint**: the static buffer is designed for single-stream use; concurrent
+// multi-stream puts sharing it still race (the reference implementation's alltoall
+// uses one stream per peer). This instrument is single-stream, good enough;
+// multi-stream needs one buffer per stream -- a later problem.
+// The error path does not copy the original's aclFinalize() (tearing down the global
+// runtime inside a library function); it returns -1 directly.
 int aclshmem_put_mem(uint32_t block_dim, aclrtStream stream, uint64_t elementSize, void *target, void *target_offset,
                      void *src, void *src_offset, void *size, int64_t target_pe, bool non_blocking) {
   static void *sync_mem_device = nullptr;
@@ -140,14 +152,14 @@ int aclshmem_put_mem(uint32_t block_dim, aclrtStream stream, uint64_t elementSiz
 
 }  // namespace ShmemKernel
 CPPEOF
-  grep -q "TERRACE_PATCH_STATIC_SYNC_V3" "$P1" || { echo "!! 补丁 1 没生效" >&2; exit 5; }
+  grep -q "TERRACE_PATCH_STATIC_SYNC_V3" "$P1" || { echo "!! patch 1 did not take effect" >&2; exit 5; }
 fi
 
 P3=hyper_parallel/core/symmetric_memory/ops/put_mem_signal/host/put_mem_signal.cpp
 if grep -q "TERRACE_PATCH_POOL_SYNC" "$P3" 2>/dev/null; then
-  say "补丁 3 已在"
+  say "patch 3 already in"
 else
-  say "补丁 3(整文件替换):put_mem_signal 的 sync 区改 64 槽轮转池(多流安全)"
+  say "patch 3 (whole-file replacement): put_mem_signal sync region becomes a 64-slot rotating pool (multi-stream safe)"
   [ -f "$P3.orig" ] || cp "$P3" "$P3.orig"
   cat > "$P3" <<'CPPEOF'
 /**
@@ -174,12 +186,15 @@ extern void put_mem_signal(uint32_t block_dim, void *stream, uint64_t elementSiz
                            uint8_t *signal_offset, uint8_t *signal_value, int64_t signal_op, int64_t target_pe,
                            bool non_blocking, uint8_t *Syncmem);
 
-// TERRACE_PATCH_POOL_SYNC(2026-08-25):与 put_mem 的 V3 同因(原版每调用
-// malloc/memset/free,free 隐含设备同步 -> 串行化 + UAF),但这条被官方
-// alltoall 以「每对端一条流」连发,单块静态缓冲会跨流竞态。改 64 槽轮转池:
-// 每次调用取下一槽,在**本调用的流**上异步清零。同一槽两次发放之间隔 63 次
-// 调用,远大于在飞窗口(bench 每次交换 <=8 发在飞,步间有 signal_wait +
-// synchronize)。这是量具级修法,不是通用库级修法(通用要一流一缓冲)。
+// TERRACE_PATCH_POOL_SYNC (2026-08-25): same root cause as put_mem's V3 (the original
+// did malloc/memset/free per call; free implies a device synchronize -> serialization
+// + UAF), but this entry point gets fired back-to-back by the official alltoall with
+// one stream per peer, so a single static buffer would race across streams. Switch to
+// a 64-slot rotating pool: each call takes the next slot and zeroes it asynchronously
+// on **this call's stream**. Two grants of the same slot are 63 calls apart, far
+// beyond the in-flight window (the bench keeps <=8 puts in flight per exchange, with
+// signal_wait + synchronize between steps). This is an instrument-grade fix, not a
+// general library-grade fix (a general one needs one buffer per stream).
 static constexpr int SYNC_POOL = 64;
 
 int aclshmem_put_mem_signal(uint32_t block_dim, aclrtStream stream, uint64_t elementSize, void *target,
@@ -217,27 +232,29 @@ int aclshmem_put_mem_signal(uint32_t block_dim, aclrtStream stream, uint64_t ele
 
 }  // namespace ShmemKernel
 CPPEOF
-  grep -q "TERRACE_PATCH_POOL_SYNC" "$P3" || { echo "!! 补丁 3 没生效" >&2; exit 5; }
+  grep -q "TERRACE_PATCH_POOL_SYNC" "$P3" || { echo "!! patch 3 did not take effect" >&2; exit 5; }
 fi
 
 P2=hyper_parallel/core/symmetric_memory/platform/torch/torch_bindings.cpp
 if grep -q "TERRACE_PATCH_BLOCK_DIM" "$P2" 2>/dev/null; then
-  say "补丁 2 已在"
+  say "patch 2 already in"
 else
-  say "补丁 2:block_dim 可由环境变量调(默认仍是 1,行为不变)"
+  say "patch 2: block_dim tunable via env var (default stays 1; behavior unchanged)"
   python3 - "$P2" <<'PY'
 import io, sys
 p = sys.argv[1]
 s = io.open(p, encoding='utf-8').read()
 old = "static constexpr uint32_t DEFAULT_BLOCK_DIM = 1;"
-assert old in s, "torch_bindings.cpp 的 DEFAULT_BLOCK_DIM 没匹配上"
-new = ('''// TERRACE_PATCH_BLOCK_DIM(2026-08-24):原来写死 1 且无 setter,
-// TorchScript 注册里也没暴露。kernel 本身按多核写好了
-// (size_per_core = size_ / aiv_num_),但上游只给 1 个 block ——
-// **这是带宽天花板,不是发射开销**:单核 MTE 撑不起 die-to-die 链路。
-// 改成读环境变量,**默认仍是 1**(行为逐字不变,需要显式索取才变) ——
-// 教训(本仓 docs/04 也有同款):能力一旦可用就自动启用,
-// 等于把"能编译"当成"行为正确"的证据。
+assert old in s, "DEFAULT_BLOCK_DIM in torch_bindings.cpp did not match"
+new = ('''// TERRACE_PATCH_BLOCK_DIM (2026-08-24): originally hard-coded to 1 with no setter,
+// and not exposed in the TorchScript registration either. The kernel itself is
+// written for multi-core (size_per_core = size_ / aiv_num_), but upstream only ever
+// hands it 1 block -- **this is a bandwidth ceiling, not launch overhead**: a single
+// core's MTE cannot carry the die-to-die link.
+// Changed to read an env var, **default stays 1** (behavior verbatim-unchanged;
+// only changes when explicitly requested) -- lesson (this repo's docs/04 has the
+// same one): a capability that auto-enables as soon as it is available amounts to
+// treating "it compiles" as evidence of "it behaves correctly".
 static uint32_t terrace_block_dim() {
   const char *e = std::getenv("TERRACE_SHMEM_BLOCK_DIM");
   if (e == nullptr) {
@@ -255,26 +272,29 @@ if "#include <cstdlib>" not in s:
     i = s.index("#include")
     s = s[:i] + "#include <cstdlib>\n" + s[i:]
 io.open(p, 'w', encoding='utf-8', newline='\n').write(s)
-print("  torch_bindings.cpp 已改")
+print("  torch_bindings.cpp patched")
 PY
-  grep -q "TERRACE_PATCH_BLOCK_DIM" "$P2" || { echo "!! 补丁 2 没生效" >&2; exit 5; }
+  grep -q "TERRACE_PATCH_BLOCK_DIM" "$P2" || { echo "!! patch 2 did not take effect" >&2; exit 5; }
 fi
 
-# ---------------------------------------------------------------- 编译
-# 默认是 --multicore mindspore --shmem all --custom-ops on,对 torch-only 环境三个全错。
-say "编译(只要 torch 后端的 shmem)"
-export ASCEND_HOME_PATH="${ASCEND_HOME_PATH:?先 source CANN 的 set_env.sh}"
+# ---------------------------------------------------------------- build
+# Defaults are --multicore mindspore --shmem all --custom-ops on; all three are wrong for a torch-only environment.
+say "building (only the shmem for the torch backend)"
+export ASCEND_HOME_PATH="${ASCEND_HOME_PATH:?source the CANN set_env.sh first}"
 ./build.sh --shmem torch --multicore off --custom-ops off --strict on
 
 WHL=$(ls -t dist/hyper_parallel-*.whl 2>/dev/null | head -1)
-[ -n "$WHL" ] || { echo "!! 没产出 wheel" >&2; exit 6; }
-say "产出 $WHL"
-# **不能 editable 安装**:.so 是 setup.py 的 BuildPy 从 build/lib 拷进 wheel 的,
-# editable 装完 hyper_parallel/lib/shmem/ 不存在,import 会硬 raise FileNotFoundError。
+[ -n "$WHL" ] || { echo "!! no wheel produced" >&2; exit 6; }
+say "produced $WHL"
+# **No editable install**: the .so is copied into the wheel from build/lib by setup.py's
+# BuildPy; after an editable install, hyper_parallel/lib/shmem/ does not exist and the
+# import hard-raises FileNotFoundError.
 pip install --force-reinstall --no-deps "$WHL"
 
-# 按路径验,不 import —— 顶层 __init__ 是重初始化 + 无条件 monkey patch,
-# bench 本来就绕开它(见 tools/onesided/bench_onesided.py 文档),验证器学它 import 是自相矛盾。
+# Verify by path, without importing -- the top-level __init__ does heavy initialization
+# plus an unconditional monkey patch; the bench bypasses it by design (see the
+# tools/onesided/bench_onesided.py docstring), so a verifier that imports it would
+# contradict itself.
 SO=$(python - <<'VPY'
 import os, site, sysconfig
 cands = site.getsitepackages() + [sysconfig.get_paths()["purelib"]]
@@ -287,9 +307,9 @@ for sp in cands:
 VPY
 )
 if [ -n "$SO" ] && [ -f "$SO" ]; then
-  say "**成功**:$SO"
-  say "下一步:torchrun --nnodes=1 --nproc_per_node=8 tools/onesided/bench_onesided.py"
+  say "**success**: $SO"
+  say "next: torchrun --nnodes=1 --nproc_per_node=8 tools/onesided/bench_onesided.py"
 else
-  echo "!! wheel 装了但找不到 libaclshmem_torch.so —— 编译多半没带上 shmem" >&2
+  echo "!! wheel installed but libaclshmem_torch.so not found -- the build most likely skipped shmem" >&2
   exit 7
 fi

@@ -1,111 +1,140 @@
 /**
- * terrace_k2_pack -- AscendC kernel:T-A2A 发送侧融合打包链(K2,C1 quota 线格式)。
+ * terrace_k2_pack -- AscendC kernel: T-A2A send-side fused pack chain (K2, C1 quota wire format).
  *
- * ============================== 功能规格(逐位复刻)==============================
+ * ===================== Functional spec (bitwise replication) =====================
  *
- * 复刻 quota 快路径(等额配额,groups_m=M)下、Hop A 计数交换之前的整段现组合链
- * (terrace/ta2a.py::plan_ta2a 快路径 + terrace/ta2a_fwd.py 的发送段;
- * ta2a_moe_forward 与 ta2a_dispatch.ta2a_permute[_overlap] 同段同构):
+ * Replicates, under the quota fast path (equal-quota, groups_m=M), the entire existing
+ * composed chain before the Hop A count exchange (terrace/ta2a.py::plan_ta2a fast path +
+ * the send stage of terrace/ta2a_fwd.py; ta2a_moe_forward and
+ * ta2a_dispatch.ta2a_permute[_overlap] share this same stage, isomorphically):
  *
  *     u_src, u_node, node_counts, inverse = plan_ta2a(expert_idx, world,
  *                                                     n_experts, rpn, groups_m=M)
- *     payload = hidden[u_src]                       # 去重 gather,节点主序
+ *     payload = hidden[u_src]                       # deduplicated gather, node-major order
  *     mask, gate_rows = _pack_quota_wire(expert_idx, gates, inverse, payload,
  *                                        n_rows, slots, quota, n_experts)
  *
- * 输入:hidden [T, H](fp16/bf16/fp32)、expert_idx [T, k](int64)、gates [T, k]
- * (与 hidden 同 dtype —— C1 圆整点契约,gate 平面从 payload 派生,失配在 torch
- * 侧大声死);属性 world / n_experts / rpn / groups_m。
- * 输出:payload [T*M, H]、mask [T*M, quota](升序槽号表,int64)、gate_rows
- * [T*M, quota]、u_src [T*M] int64、node_counts [n_nodes] int64;quota = k/M。
- * u_node 不输出:三处调用方都不用它(ta2a_permute 丢弃、overlap 半边用 `_` 接、
- * 融合前向不再读);inverse 不输出:quota 支路上它只被打包消费,kernel 吸掉了。
+ * Inputs: hidden [T, H] (fp16/bf16/fp32), expert_idx [T, k] (int64), gates [T, k]
+ * (same dtype as hidden -- the C1 rounding-point contract: the gate plane derives from
+ * payload, and a mismatch dies loudly on the torch side); attributes world / n_experts /
+ * rpn / groups_m.
+ * Outputs: payload [T*M, H], mask [T*M, quota] (ascending slot table, int64), gate_rows
+ * [T*M, quota], u_src [T*M] int64, node_counts [n_nodes] int64; quota = k/M.
+ * u_node is not output: none of the three call sites uses it (ta2a_permute discards it,
+ * the overlap half binds it to `_`, the fused forward no longer reads it); inverse is not
+ * output: on the quota branch it is only consumed by packing, which the kernel absorbs.
  *
- * 行内无升序担保(kernel 内建行排序,见下),所以同一枚 kernel 同时逐位覆盖
- * _pack_quota_wire 的 sorted_rows=True(接缝,行升序时行排序恒等)与 =False
- * (融合前向,行内一次排序)两个入口。
+ * No within-row ascending order is assumed (the kernel sorts each row itself, see below),
+ * so one and the same kernel covers, bit for bit, both _pack_quota_wire entry points:
+ * sorted_rows=True (the seam; the row sort is the identity when rows are already
+ * ascending) and =False (fused forward; one in-row sort).
  *
- * ========================= 两遍法与稳定序逐位一致的论证 =========================
+ * ========== Why the two-pass method matches the stable order bit for bit ==========
  *
- * 现链的行序由 plan_ta2a 固定:occ [T, n_nodes] 占用表按**节点主序**平铺
- * (node_first = occ.t().reshape(-1)),置位的升序位置即发送行 —— 行按
- * (node 升序, token 升序) 排布;u_src = sel % T,counts[n] = 触达 n 的 token 数。
- * quota 支路的 searchsorted 压缩与通用支路的 argsort 压缩逐位同
- * (tests/test_ta2a.py::test_fastpath_sortfree_construction_is_bitwise_equal)。
+ * The live chain's row order is fixed by plan_ta2a: the occupancy table occ
+ * [T, n_nodes] is flattened in **node-major order** (node_first = occ.t().reshape(-1));
+ * the ascending positions of the set bits are the send rows -- rows are laid out in
+ * (ascending node, ascending token) order; u_src = sel % T, counts[n] = number of tokens
+ * touching n. The quota branch's searchsorted compaction and the generic branch's argsort
+ * compaction are bitwise identical
+ * (tests/test_ta2a.py::test_fastpath_sortfree_construction_is_bitwise_equal).
  *
- * kernel 的同一数学对象,枚举单位是 run(等额配额下 token 的 k 个专家升序后
- * 恰分成 M 段,每段 quota 个、整段落在同一节点 —— plan_ta2a 首调 + 每 256 调
- * 验证的不变量):
- *   run 枚举序 p = t*M + j(t 升序、行内段号 j 升序);run 的目的节点
- *   d(t,j) = e_sorted[t, j*quota] / slots,随 j 严格升序(行升序 => 节点非降,
- *   等额 => 每节点恰一段 => 严格升序)。
+ * The kernel computes the same mathematical object, enumerating in units of runs (under
+ * equal quota, a token's k experts, sorted ascending, split into exactly M segments of
+ * quota each, every segment landing on a single node -- the invariant plan_ta2a verifies
+ * on its first call and every 256 calls):
+ *   run enumeration order p = t*M + j (ascending t, ascending in-row segment id j); a
+ *   run's destination node d(t,j) = e_sorted[t, j*quota] / slots, strictly increasing in
+ *   j (ascending row => non-decreasing node, equal quota => exactly one segment per node
+ *   => strictly increasing).
  *
- *   第 1 遍(计数):对**槽位平面**全量扫描(f = 0..T*k-1),slotHist[e/slots]++,
- *     在 f == t0*k 处快照本核区间之前的部分直方图 mineSlots[]。等额配额下节点 d
- *     的槽位数 = quota * (touched-token 数),故 hist[d] = slotHist[d]/quota 与
- *     mine[d] = mineSlots[d]/quota 的除法**精确**(整除),且不需要行排序 ——
- *     第 1 遍零排序、零核间同步(K1 同款:全量扫换每核独立算出全局桶基址
- *     base[d] 与本核游标起点 cur[d] = base[d] + mine[d],无 SyncAll/无 workspace
- *     游标表)。代价是 expert_idx 平面(T*k*8B,万级 = 几百 KB)每核多读一遍,
- *     相对 [T*M, H] 载荷搬运(每行 4-16KB)是零头。
- *   第 2 遍(打包写行):每核按 token 序扫自己的 [t0, t1),行内插入排序
- *     (k <= 64,标量;专家号行内互异,置换唯一 —— 与 _pack_quota_wire 的
- *     float32-key argsort 同一置换,见 ta2a_fwd 的 <2^24 精确性论证),对每个
- *     run:dst = cur[d]++,写 u_src[dst] = t、mask[dst, i] = e_sorted[jq+i] %
- *     slots(升序,C1 线上契约)、gate_rows[dst, i] = gates 行内同置换第 jq+i
- *     元(纯位搬运)、payload[dst, :] = hidden[t, :]。
+ *   Pass 1 (count): scan the **slot plane** in full (f = 0..T*k-1), slotHist[e/slots]++,
+ *     snapshotting at f == t0*k the partial histogram mineSlots[] of everything before
+ *     this core's range. Under equal quota, node d's slot count = quota * (number of
+ *     touched tokens), so the divisions hist[d] = slotHist[d]/quota and
+ *     mine[d] = mineSlots[d]/quota are **exact** (they divide evenly), and no row sorting
+ *     is needed -- pass 1 has zero sorting and zero inter-core sync (same as K1: the full
+ *     scan lets each core independently compute the global bucket bases base[d] and its
+ *     own cursor starts cur[d] = base[d] + mine[d]; no SyncAll / no workspace cursor
+ *     table). The cost is one extra read of the expert_idx plane per core (T*k*8B; tens
+ *     of thousands = a few hundred KB), a rounding error next to the [T*M, H] payload
+ *     copy (4-16KB per row).
+ *   Pass 2 (pack and write rows): each core scans its own [t0, t1) in token order,
+ *     insertion-sorts each row (k <= 64, scalar; expert ids are distinct within a row, so
+ *     the permutation is unique -- the same permutation as _pack_quota_wire's float32-key
+ *     argsort, see the <2^24 exactness argument in ta2a_fwd), and for each run:
+ *     dst = cur[d]++, writing u_src[dst] = t, mask[dst, i] = e_sorted[jq+i] % slots
+ *     (ascending, the C1 wire contract), gate_rows[dst, i] = element jq+i of the gates
+ *     row under the same permutation (pure bit move), payload[dst, :] = hidden[t, :].
  *
- * 逐位一致证明:对任意节点桶 d,写进它的 run 是全体 d(t,j)==d 的 run;核间按
- * token 升序划分连续区间、核内按 (t, j) 升序扫描,而某核在桶 d 的游标起点恰好
- * 越过了所有更小 t 的同桶 run(mine[d] 计的就是 token < t0 的部分);等额配额下
- * 每 token 对每节点至多一个 run,故桶内落位次序 == token 升序 == plan 的桶内序;
- * 桶间按 base[] 升序 == 节点升序。故 dst 置换与 plan 的 sel 枚举逐元素相等 =>
- * payload/u_src/node_counts 逐位同。mask/gate_rows:_pack_quota_wire 的行散射
- * 目标 rof[t*M+j] = inverse[t, order[j*quota]] 恰是 (t, d(t,j)) 的发送行 ==
- * dst(t,j),散射值 = 行升序置换后的槽号/gate 段 == kernel 的写值;gate 全程
- * 无浮点算术(位搬运),与 torch 的 gather 逐位同。
+ * Bitwise-identity proof: for any node bucket d, the runs written into it are exactly the
+ * runs with d(t,j)==d; cores partition contiguous ranges in ascending token order and
+ * scan in ascending (t, j) within a core, and a core's cursor start in bucket d skips
+ * exactly the same-bucket runs with smaller t (mine[d] counts precisely the token < t0
+ * part); under equal quota each token has at most one run per node, so the in-bucket
+ * landing order == ascending token == the plan's in-bucket order; buckets follow
+ * ascending base[] == ascending node. Hence the dst permutation equals the plan's sel
+ * enumeration element for element => payload/u_src/node_counts are bitwise identical.
+ * mask/gate_rows: _pack_quota_wire's row-scatter target
+ * rof[t*M+j] = inverse[t, order[j*quota]] is exactly the send row of (t, d(t,j)) ==
+ * dst(t,j), and the scattered values = the slot/gate segments after the row's ascending
+ * permutation == what the kernel writes; gates see no floating-point arithmetic anywhere
+ * (bit moves), bitwise identical to torch's gather.
  *
- * ================================ 910C 硬件边界 ================================
+ * ============================ 910C hardware boundary ============================
  *
- *   - 无 int64 向量算术/移位/廉价排序(内部工程记录;路线图"硬件负面"),本 kernel
- *     不发出任何 int64 **向量**指令:int64 平面(expert_idx/mask/u_src/node_counts)
- *     全部以 int32 对(小端 lo/hi)做标量读写 —— 专家号 < n_experts < 2^31(host
- *     拦截;现链上游 float32 键还限 < 2^24)、token 号 < T < 2^31、计数 <= T*M <
- *     2^31,高 32 位恒 0,读低词、写 (lo, 0) 即位级完整的非负 int64。
- *   - 排序仅行内 k 元素插入排序(标量单元,k <= 64);桶排序整体免掉(游标法)。
- *   - 载荷行搬运走 DataCopy(GM->UB->GM,double buffer 队列,与 K1/passthrough
- *     同款);host tiling 保证 H*sizeof(dtype) 是 32B 的倍数(真实 hidden
- *     2048/7168 恒真),故无 DataCopyPad 需求。
- *   - 第 1 遍 expert_idx 的扫描经 UB staging(int32 视图 DataCopy 进 UB 后标量
- *     读),尾部不足 32B 对齐的 <4 个 int64 退化为 GM 标量读 —— 不越界读。
- *     第 2 遍只读本核区间(1/usedCores 的平面),直接 GM 标量读,不与第 1 遍的
- *     staging 缓冲打架。
+ *   - No int64 vector arithmetic/shifts/cheap sorting (internal engineering records;
+ *     roadmap "hardware negatives"). This kernel emits no int64 **vector** instructions:
+ *     the int64 planes (expert_idx/mask/u_src/node_counts) are all accessed as int32
+ *     pairs (little-endian lo/hi) via scalar reads/writes -- expert ids < n_experts <
+ *     2^31 (host-enforced; upstream in the live chain the float32 key further caps
+ *     them < 2^24), token ids < T < 2^31, counts <= T*M < 2^31, the high 32 bits are
+ *     always 0, so reading the low word and writing (lo, 0) is a bit-complete
+ *     non-negative int64.
+ *   - The only sort is the in-row k-element insertion sort (scalar unit, k <= 64); the
+ *     bucket sort is avoided entirely (cursor method).
+ *   - Payload rows move via DataCopy (GM->UB->GM, double-buffered queues, same pattern as
+ *     K1/passthrough); host tiling guarantees H*sizeof(dtype) is a multiple of 32B
+ *     (always true for the real hidden sizes 2048/7168), so no DataCopyPad is needed.
+ *   - Pass 1's expert_idx scan goes through UB staging (DataCopy the int32 view into UB,
+ *     then scalar reads); the tail of <4 int64s short of 32B alignment degrades to scalar
+ *     GM reads -- no out-of-bounds reads. Pass 2 reads only this core's range
+ *     (1/usedCores of the plane) via direct scalar GM reads, never contending with
+ *     pass 1's staging buffer.
  *
- * 损坏输入的收容(不承诺位级,只承诺不写穿):专家号越界(<0 或 >= n_experts)
- * 两遍同判据跳过;等额配额不变量漂移(plan_ta2a 每 256 调之间未被验证的窗口)
- * 下游标可能越过桶界,dst >= nRows 的写整行跳过 —— torch 侧 mask/gate_rows/
- * u_src/node_counts 以 zeros 分配(_pack_quota_wire 的 zeros 收容原文:缺行 ==
- * 槽 0/gate 0,形状无害),现组合链在同窗口则是 searchsorted 越界行号在下游
- * gather 处大声死 —— 两种收容都不静默出假数,过闸以正常输入的逐位等价为准。
+ * Containment of corrupted inputs (no bitwise promise, only a no-overrun promise):
+ * out-of-range expert ids (<0 or >= n_experts) are skipped under the same criterion in
+ * both passes; if the equal-quota invariant drifts (the unverified window between
+ * plan_ta2a's every-256-calls checks), cursors may cross bucket boundaries, and any write
+ * with dst >= nRows skips the whole row -- on the torch side mask/gate_rows/u_src/
+ * node_counts are allocated as zeros (_pack_quota_wire's original zeros containment: a
+ * missing row == slot 0/gate 0, shape-harmless), while the live composed chain in the
+ * same window dies loudly at the downstream gather on a searchsorted out-of-range row id
+ * -- neither containment silently fabricates data; gate passage is judged on bitwise
+ * equivalence for well-formed inputs.
  *
- * 集群编译验证点([V1]-[V4] 与 K1 完全同款,拿不准处一律保守写法):
- *   [V1] PipeBarrier<PIPE_ALL>:staging 与标量读之间的重锤同步。若该重载在本
- *        CANN drop 不可用,换 SetFlag/WaitFlag<HardEvent::MTE2_S> 与 S_MTE2 对。
- *   [V2] GlobalTensor<int32_t>::GetValue/SetValue 标量 GM 访问;若个别 drop 要求
- *        显式 dcache 刷新才对 host 可见,在 Process() 末尾加
- *        DataCacheCleanAndInvalid(ENTIRE_DATA_CACHE)。
- *   [V3] 标量 GM 写与 MTE3 DataCopy 写不同地址区间,无别名冲突;若位级验证发现
- *        u_src/mask/node_counts 偶发旧值,先查 [V2]。
- *   [V4] DTYPE_GATES 为 bf16 时以 uint16 位搬(sizeof 分支),不触碰 bf16 标量
- *        算术语义 —— 纯 move,与 torch 的 gather 逐位同。
+ * Cluster-compile verification points ([V1]-[V4] identical to K1; conservative form
+ * everywhere we were unsure):
+ *   [V1] PipeBarrier<PIPE_ALL>: sledgehammer sync between staging and scalar reads. If
+ *        this overload is unavailable in this CANN drop, switch to the
+ *        SetFlag/WaitFlag<HardEvent::MTE2_S> and S_MTE2 pair.
+ *   [V2] GlobalTensor<int32_t>::GetValue/SetValue scalar GM access; if a particular drop
+ *        requires an explicit dcache flush for host visibility, add
+ *        DataCacheCleanAndInvalid(ENTIRE_DATA_CACHE) at the end of Process().
+ *   [V3] Scalar GM writes and MTE3 DataCopy writes target disjoint address ranges, so no
+ *        aliasing conflict; if bitwise verification shows u_src/mask/node_counts
+ *        occasionally holding stale values, check [V2] first.
+ *   [V4] When DTYPE_GATES is bf16, move it as uint16 bits (sizeof branch), never touching
+ *        bf16 scalar arithmetic semantics -- a pure move, bitwise identical to torch's
+ *        gather.
  */
 #include "kernel_operator.h"
 
 using namespace AscendC;
 
-constexpr int32_t BUFFER_NUM = 2;      // 载荷行搬运 double buffer
-constexpr uint32_t MAX_NODES = 256;    // 节点桶上限(host tiling 同值拦截)
-constexpr uint32_t MAX_K = 64;         // 行内排序数组上限(host tiling 同值拦截)
+constexpr int32_t BUFFER_NUM = 2;      // double buffer for payload row copy
+constexpr uint32_t MAX_NODES = 256;    // node-bucket cap (host tiling enforces the same value)
+constexpr uint32_t MAX_K = 64;         // in-row sort array cap (host tiling enforces the same value)
 
 class KernelTerraceK2Pack {
 public:
@@ -132,7 +161,7 @@ public:
         this->idxChunk = idxChunk;
         this->rowTile = rowTile;
 
-        // 本核负责的连续 token 区间 [t0, t1):前 tokensRem 核各多 1(与 host 一致)。
+        // This core's contiguous token range [t0, t1): the first tokensRem cores get 1 extra each (matches host).
         uint32_t idx = static_cast<uint32_t>(GetBlockIdx());
         this->t0 = idx * tokensPerCoreBase + (idx < tokensRem ? idx : tokensRem);
         this->t1 = this->t0 + tokensPerCoreBase + (idx < tokensRem ? 1u : 0u);
@@ -141,7 +170,7 @@ public:
                                  static_cast<uint64_t>(tokens) * hiddenW);
         payloadGm.SetGlobalBuffer((__gm__ DTYPE_PAYLOAD *)payload,
                                   static_cast<uint64_t>(nRows) * hiddenW);
-        // int64 平面的 int32 视图(小端 lo/hi 对,见文件头"硬件边界")。
+        // int32 views of the int64 planes (little-endian lo/hi pairs; see "hardware boundary" in the file header).
         idxGm32.SetGlobalBuffer((__gm__ int32_t *)expertIdx,
                                 static_cast<uint64_t>(tokens) * topk * 2);
         maskGm32.SetGlobalBuffer((__gm__ int32_t *)mask,
@@ -150,7 +179,7 @@ public:
                                  static_cast<uint64_t>(nRows) * 2);
         countsGm32.SetGlobalBuffer((__gm__ int32_t *)nodeCounts,
                                    static_cast<uint64_t>(nNodes) * 2);
-        // gate 平面按位宽以整数位型搬运([V4]):两套视图都建,运行期按 sizeof 选。
+        // The gate plane moves as integer bit patterns by width ([V4]): build both views, pick by sizeof at run time.
         uint64_t flat = static_cast<uint64_t>(tokens) * topk;
         gatesGm16.SetGlobalBuffer((__gm__ uint16_t *)gates, flat);
         gateOutGm16.SetGlobalBuffer((__gm__ uint16_t *)gateRows, flat);
@@ -159,11 +188,13 @@ public:
 
         pipe.InitBuffer(rowQueue, BUFFER_NUM,
                         this->rowTile * sizeof(DTYPE_HIDDEN));
-        // **必须有 VECOUT 队列。** 2026-08-24 在 passthrough 上实测:`TQue` 的位置
-        // 决定它同步哪两条流水 —— VECIN 配 MTE2->V,VECOUT 才配 V->MTE3。
-        // CopyRow 是 GM->UB->GM,只走 VECIN 时那道 MTE3 没人拦,搬出去的是脏数据。
-        // 这个错沿注释链 passthrough -> K1 -> K2 传了三份,全部**静默**:
-        // 编译过、加载过、执行过,只有逐位比对才现形(8x256 错 2047/2048)。
+        // **The VECOUT queue is mandatory.** Measured on passthrough on 2026-08-24: a
+        // `TQue`'s position decides which two pipelines it synchronizes -- VECIN pairs
+        // MTE2->V; only VECOUT pairs V->MTE3. CopyRow is GM->UB->GM; with VECIN alone
+        // nothing fences that MTE3, and dirty data gets copied out.
+        // This bug propagated along the comment chain passthrough -> K1 -> K2, three
+        // copies, all of them **silent**: it compiled, loaded, and ran; only bitwise
+        // comparison exposed it (8x256, 2047/2048 wrong).
         pipe.InitBuffer(rowOutQueue, BUFFER_NUM,
                         this->rowTile * sizeof(DTYPE_HIDDEN));
         pipe.InitBuffer(idxStage, this->idxChunk * 2 * sizeof(int32_t));
@@ -171,16 +202,17 @@ public:
 
     __aicore__ inline void Process()
     {
-        uint32_t slotHist[MAX_NODES];  // 全局槽位直方图(每核独立算出同一份)
-        uint32_t mineSlots[MAX_NODES]; // token < t0 的部分槽位直方图
-        uint32_t cur[MAX_NODES];       // 本核写游标(run 粒度)
+        uint32_t slotHist[MAX_NODES];  // global slot histogram (every core independently computes the same one)
+        uint32_t mineSlots[MAX_NODES]; // partial slot histogram for tokens < t0
+        uint32_t cur[MAX_NODES];       // this core's write cursors (run granularity)
         for (uint32_t b = 0; b < nNodes; b++) {
             slotHist[b] = 0;
             mineSlots[b] = 0;
         }
 
-        // ---- 第 1 遍:槽位平面全量计数 + 在 f == t0*topk 处快照(零核间同步,
-        // 零排序 —— 等额配额下 run 计数 = 槽位计数 / quota,整除,见文件头)----
+        // ---- Pass 1: full count over the slot plane + snapshot at f == t0*topk (zero
+        // inter-core sync, zero sorting -- under equal quota, run count = slot count /
+        // quota, exact division; see file header) ----
         uint32_t flatTotal = tokens * topk;
         uint32_t f0 = t0 * topk;
         bool snapped = (f0 == 0);
@@ -201,22 +233,24 @@ public:
                 }
                 int32_t e = IdxAt(chunkStart, i);
                 if (e < 0 || static_cast<uint32_t>(e) >= nExperts) {
-                    continue;   // 越界专家号:现链在 plan 的 gather/scatter 处大声
-                }               // 死;kernel 侧跳过以免写穿(损坏输入,不承诺位级)
+                    continue;   // out-of-range expert id: the live chain dies loudly
+                }               // at plan's gather/scatter; the kernel skips to avoid
+                                // overruns (corrupted input, no bitwise promise)
                 slotHist[static_cast<uint32_t>(e) / slots]++;
             }
         }
-        if (!snapped) {          // t0 == tokens:本核无 token,mine 仅形式取值
+        if (!snapped) {          // t0 == tokens: this core has no tokens; mine is only formally assigned
             for (uint32_t b = 0; b < nNodes; b++) {
                 mineSlots[b] = slotHist[b];
             }
         }
 
-        // 全局桶基址 + 本核游标起点(稳定序的关键:base[b] + mine[b],证明见文件
-        // 头)。node_counts = run 直方图,单核写([V3] 同 K1 的 i_send)。
+        // Global bucket bases + this core's cursor starts (the key to stable order:
+        // base[b] + mine[b]; proof in the file header). node_counts = the run histogram,
+        // single-core write ([V3], same as K1's i_send).
         uint32_t base = 0;
         for (uint32_t b = 0; b < nNodes; b++) {
-            uint32_t h = slotHist[b] / quota;          // 等额配额下整除,精确
+            uint32_t h = slotHist[b] / quota;          // divides evenly under equal quota, exact
             cur[b] = base + mineSlots[b] / quota;
             if (GetBlockIdx() == 0) {
                 countsGm32.SetValue(2 * b, static_cast<int32_t>(h));
@@ -225,10 +259,10 @@ public:
             base += h;
         }
 
-        // ---- 第 2 遍:本核区间 [t0, t1) 按 token 序行排序 + 逐 run 打包写行 ----
-        uint32_t eVal[MAX_K];    // 行内专家号(int64 低词;高词恒 0,见文件头)
-        uint32_t gBits[MAX_K];   // 行内 gate 原始位(16/32 位,纯搬运 [V4])
-        bool eOk[MAX_K];         // 行内逐元素越界标记(两遍同判据)
+        // ---- Pass 2: over this core's range [t0, t1) in token order, sort each row + pack and write per run ----
+        uint32_t eVal[MAX_K];    // in-row expert ids (int64 low words; high words always 0, see file header)
+        uint32_t gBits[MAX_K];   // in-row raw gate bits (16/32-bit, pure move [V4])
+        bool eOk[MAX_K];         // per-element in-row out-of-range flags (same criterion in both passes)
         for (uint32_t t = t0; t < t1; t++) {
             uint64_t rowBase = static_cast<uint64_t>(t) * topk;
             for (uint32_t j = 0; j < topk; j++) {
@@ -239,8 +273,10 @@ public:
                                ? static_cast<uint32_t>(gatesGm16.GetValue(rowBase + j))
                                : gatesGm32.GetValue(rowBase + j);
             }
-            // 行内插入排序,升序按专家号(行内互异 => 置换唯一,== 现链
-            // argsort(float32) 的置换;插入排序稳定,重复号的损坏输入下仍确定)。
+            // In-row insertion sort, ascending by expert id (distinct within a row =>
+            // unique permutation, == the live chain's argsort(float32) permutation;
+            // insertion sort is stable, so even corrupted inputs with duplicate ids stay
+            // deterministic).
             for (uint32_t a = 1; a < topk; a++) {
                 uint32_t ev = eVal[a];
                 uint32_t gv = gBits[a];
@@ -259,12 +295,12 @@ public:
             for (uint32_t j = 0; j < groupsM; j++) {
                 uint32_t lead = j * quota;
                 if (!eOk[lead]) {
-                    continue;    // run 首元越界:与第 1 遍同判据(该槽位没进直方图)
+                    continue;    // run leader out of range: same criterion as pass 1 (that slot never entered the histogram)
                 }
-                uint32_t d = eVal[lead] / slots;       // < nNodes(lead < nExperts)
+                uint32_t d = eVal[lead] / slots;       // < nNodes (lead < nExperts)
                 uint32_t dst = cur[d]++;
                 if (dst >= nRows) {
-                    continue;    // 配额不变量漂移的收容:跳过写,不写穿(文件头)
+                    continue;    // containment for quota-invariant drift: skip the write, no overrun (file header)
                 }
                 usrcGm32.SetValue(2 * static_cast<uint64_t>(dst),
                                   static_cast<int32_t>(t));
@@ -272,11 +308,11 @@ public:
                 for (uint32_t i = 0; i < quota; i++) {
                     uint32_t p = lead + i;
                     uint64_t o = static_cast<uint64_t>(dst) * quota + i;
-                    // 越界成员写槽 0/gate 0(zeros 收容,_pack_quota_wire 原文)。
+                    // Out-of-range members write slot 0/gate 0 (zeros containment, verbatim from _pack_quota_wire).
                     int32_t s = eOk[p] ? static_cast<int32_t>(eVal[p] % slots) : 0;
                     maskGm32.SetValue(2 * o, s);
                     maskGm32.SetValue(2 * o + 1, 0);
-                    if (sizeof(DTYPE_GATES) == 2) {    // [V4] 纯位搬运
+                    if (sizeof(DTYPE_GATES) == 2) {    // [V4] pure bit move
                         gateOutGm16.SetValue(o, eOk[p]
                             ? static_cast<uint16_t>(gBits[p]) : uint16_t(0));
                     } else {
@@ -286,29 +322,30 @@ public:
                 CopyRow(t, dst);
             }
         }
-        // [V2] 若位级验证发现标量写平面偶发旧值,在此加 dcache 刷新。
+        // [V2] If bitwise verification shows the scalar-write planes occasionally holding stale values, add a dcache flush here.
     }
 
 private:
-    // expert_idx 平铺块 [chunkStart, chunkStart+n) 进 UB:32B 对齐部分 DataCopy,
-    // 尾部 <4 个 int64 留给 IdxAt 的 GM 标量读。int32 视图下 4 个 int64 = 8 int32
-    // = 32B。仅第 1 遍使用(全量扫);第 2 遍只读本核 1/usedCores 区间,GM 标量读。
+    // Stage the flattened expert_idx chunk [chunkStart, chunkStart+n) into UB: DataCopy
+    // the 32B-aligned part; the tail of <4 int64s is left to IdxAt's scalar GM reads. In
+    // the int32 view, 4 int64 = 8 int32 = 32B. Used by pass 1 only (the full scan);
+    // pass 2 reads only this core's 1/usedCores range via scalar GM reads.
     __aicore__ inline void StageIdx(uint32_t chunkStart, uint32_t n)
     {
         stagedAligned = n & ~3u;
         stagedBase = chunkStart;
         if (stagedAligned > 0) {
             LocalTensor<int32_t> sl = idxStage.Get<int32_t>();
-            // [V1] 复用缓冲:上一块的标量读必须先于本次 MTE2 覆写完成。
+            // [V1] Reused buffer: the previous chunk's scalar reads must complete before this MTE2 overwrite.
             PipeBarrier<PIPE_ALL>();
             DataCopy(sl, idxGm32[static_cast<uint64_t>(chunkStart) * 2],
                      stagedAligned * 2);
-            // [V1] 标量读必须等 MTE2 落定。
+            // [V1] Scalar reads must wait for MTE2 to land.
             PipeBarrier<PIPE_ALL>();
         }
     }
 
-    // 第 chunkStart+i 个平铺槽位的专家号(int64 低词;高词恒 0,见文件头)。
+    // Expert id at flattened slot chunkStart+i (int64 low word; high word always 0, see file header).
     __aicore__ inline int32_t IdxAt(uint32_t chunkStart, uint32_t i)
     {
         if (i < stagedAligned) {
@@ -318,9 +355,10 @@ private:
         return idxGm32.GetValue((static_cast<uint64_t>(chunkStart) + i) * 2);
     }
 
-    // hidden 第 srcTok 行 -> payload 第 dst 行:GM->UB->GM,rowTile 分段,double
-    // **两条队列**:VECIN 管 MTE2->V,VECOUT 管 V->MTE3。原先照抄的
-    // 「K1/passthrough 样板」只有一条 VECIN —— 那个样板本身是错的。
+    // Row srcTok of hidden -> row dst of payload: GM->UB->GM, split by rowTile, double
+    // **Two queues**: VECIN handles MTE2->V, VECOUT handles V->MTE3. The
+    // "K1/passthrough template" this originally copied had only one VECIN queue -- that
+    // template itself was wrong.
     __aicore__ inline void CopyRow(uint32_t srcTok, uint32_t dst)
     {
         uint64_t srcBase = static_cast<uint64_t>(srcTok) * hiddenW;
@@ -364,8 +402,9 @@ private:
     uint32_t stagedAligned = 0, stagedBase = 0;
 };
 
-// 入口符号:算子类型 TerraceK2Pack 的 snake_case(msopgen 骨架约定)。
-// DTYPE_HIDDEN / DTYPE_GATES / DTYPE_PAYLOAD 宏由构建系统按 dtype 组合实例化注入。
+// Entry symbol: snake_case of the op type TerraceK2Pack (msopgen skeleton convention).
+// The DTYPE_HIDDEN / DTYPE_GATES / DTYPE_PAYLOAD macros are injected by the build system
+// when instantiating per dtype combination.
 extern "C" __global__ __aicore__ void terrace_k2_pack(
     GM_ADDR hidden, GM_ADDR expert_idx, GM_ADDR gates, GM_ADDR payload,
     GM_ADDR mask, GM_ADDR gate_rows, GM_ADDR u_src, GM_ADDR node_counts,
@@ -373,7 +412,7 @@ extern "C" __global__ __aicore__ void terrace_k2_pack(
 {
     GET_TILING_DATA(tilingData, tiling);
     if (tilingData.nRows == 0) {
-        return;                       // T == 0:五个输出全空/全零,host 已按形状分配
+        return;                       // T == 0: all five outputs empty/zero; host has already allocated by shape
     }
     KernelTerraceK2Pack op;
     op.Init(hidden, expert_idx, gates, payload, mask, gate_rows, u_src, node_counts,

@@ -153,7 +153,7 @@ def _balance_aux(loads, gates, idxs, a: ModelArgs):
     version computed sum_i f_i^2 from counts alone -- zero gradient w.r.t. every parameter,
     so the knob raised the reported loss without exerting any balancing pressure
     (2026-08-02 full-repo review, H3). Scope of the old bug: this reference stack only;
-    the 上游训练栈 arms all trained with Megatron's own seq_aux_loss and are unaffected.
+    the upstream training-stack arms all trained with Megatron's own seq_aux_loss and are unaffected.
     """
     tot = a.n_experts
     aux = None

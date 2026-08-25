@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""仿真核心:集群规格、MoE 几何 → 流量,两种策略的每次调用成本,步级合成。
+"""Simulation core: cluster spec, MoE geometry -> traffic, per-call cost of both strategies, step-level composition.
 
-每条公式旁标注它的实测出处(内部实测记录)。**公式全部用 2026-08-24
-红队更正后的版本**(内部实测记录):字节账按「两侧都逐份发、不做卡级去重」,
-Hop A 发往自己节点那份是纯自拷贝(_send_index 恒等于发送方,不过链路)。
+Every formula is annotated with its measured provenance (internal measurement records).
+**All formulas are the 2026-08-24 red-team-corrected versions** (internal measurement
+records): the byte ledger counts "both sides send every copy, no card-level dedup";
+the Hop A copy destined for the sender's own node is a pure self-copy (_send_index
+always equals the sender; it never crosses the link).
 """
 from __future__ import annotations
 
@@ -13,21 +15,24 @@ from dataclasses import dataclass, field
 
 
 # ----------------------------------------------------------------------------
-# 集群规格
+# Cluster spec
 # ----------------------------------------------------------------------------
 
 @dataclass
 class Level:
-    """一层通信域:能做 a2a 的一组卡。
+    """One communication domain level: a set of cards that can run a2a together.
 
-    alpha_ms(world) 与 beta_gbps(per_peer_bytes) 都是可调用对象或插值表 ——
-    标定层(sim/calibrate.py)负责把实测点装进来;合成集群直接给解析形式。
+    alpha_ms(world) and beta_gbps(per_peer_bytes) are both callables or interpolation
+    tables -- the calibration layer (sim/calibrate.py) loads measured points into them;
+    synthetic clusters supply analytic forms directly.
     """
     name: str
-    # α(world) [ms]:每次集合通信的固定开销。实测形状:world>=16 近似线性
-    # (另一测试框,内部实测记录:斜率 ~0.0107 ms/rank,本机整体重标)
+    # alpha(world) [ms]: fixed overhead per collective call. Measured shape: world>=16
+    # roughly linear (another test frame, internal measurement records: slope
+    # ~0.0107 ms/rank; rescaled wholesale to this machine)
     alpha_pts: list = field(default_factory=list)     # [(world, ms)]
-    # β 有效带宽 [GB/s],按每对端字节插值(对齐尺寸口径,内部实测记录:真实行宽下平坦)
+    # beta effective bandwidth [GB/s], interpolated by per-peer bytes (aligned-size
+    # convention; internal measurement records: flat at real row widths)
     beta_pts: list = field(default_factory=list)      # [(per_peer_bytes, GB/s)]
 
     def alpha_ms(self, world: int) -> float:
@@ -38,8 +43,8 @@ class Level:
 
 
 def _interp(pts, x, logx=False):
-    """分段线性插值,端点外夹紧(外推是标定的事,不是插值的事)。"""
-    assert pts, "空插值表 —— 标定没跑"
+    """Piecewise-linear interpolation, clamped beyond the endpoints (extrapolation is calibration's job, not interpolation's)."""
+    assert pts, "empty interpolation table -- calibration never ran"
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     if x <= xs[0]:
@@ -57,20 +62,25 @@ def _interp(pts, x, logx=False):
 
 @dataclass
 class ClusterSpec:
-    """一台(可能是假想的)集群。
+    """One (possibly hypothetical) cluster.
 
-    fast  = 组内域(节点内 R 张卡)
-    slow  = 跨组域(节点间;跨超节点场景下 = 超节点间)
-    flat  = 一跳 a2a 实际走的「全域」(world = n_groups*R;扁平机上它与 slow
-            同速,层级机上它的有效带宽由慢边决定 —— 标定/合成时显式给)
+    fast  = intra-group domain (the R cards inside a node)
+    slow  = cross-group domain (between nodes; in cross-supernode scenarios = between supernodes)
+    flat  = the "full fabric" a one-hop a2a actually crosses (world = n_groups*R;
+            on a flat machine it runs at slow speed, on a hierarchical machine its
+            effective bandwidth is set by the slow edge -- given explicitly at
+            calibration/synthesis time)
 
-    knobs(全部有实测出处,可按场景开关):
-      splits_sync_ms    变长 a2a 的 splits 主机取回,每次(内部实测记录)
-      chain_us_per_row  两跳到达链的本地张量操作,**按行**。
-                        第一版把它当常数 —— 验证门当场不过(负载轴 MAE 0.084):
-                        实测惩罚随 T 涨得比字节快,而到达链是张量操作,随行数线性。
-                        内部实测记录, k=6 = 24576 行)上测的
-                        => 0.0875 µs/行。融合 kernel 情景 ~0.012;完美情景 0。
+    knobs (all with measured provenance; can be toggled per scenario):
+      splits_sync_ms    host-side retrieval of splits for variable-length a2a, per call
+                        (internal measurement records)
+      chain_us_per_row  local tensor ops of the two-hop arrival chain, **per row**.
+                        The first version treated it as a constant -- the validation gate
+                        failed on the spot (load-axis MAE 0.084): the measured penalty
+                        grows faster than bytes as T grows, and the arrival chain is
+                        tensor ops, linear in row count.
+                        Measured at 24576 rows (internal measurement records, k=6)
+                        => 0.0875 us/row. Fused-kernel scenario ~0.012; perfect scenario 0.
     """
     name: str
     R: int
@@ -78,31 +88,31 @@ class ClusterSpec:
     slow: Level
     flat: Level
     splits_sync_ms: float = 0.044
-    chain_us_per_row: float = 2.15 * 1000.0 / 24576.0   # = 0.0875 µs/行,内部实测记录/flag
+    chain_us_per_row: float = 2.15 * 1000.0 / 24576.0   # = 0.0875 us/row, internal measurement records/flag
 
     def ratio(self) -> float:
-        """快/慢带宽比(在 8 MB 对齐操作点上取,报告用)。"""
+        """Fast/slow bandwidth ratio (taken at the 8 MB aligned operating point; for reporting)."""
         p = 8 * 2 ** 20
         return self.fast.beta_gbps(p) / self.slow.beta_gbps(p)
 
 
 # ----------------------------------------------------------------------------
-# MoE 几何 → 每次调用的流量
+# MoE geometry -> per-call traffic
 # ----------------------------------------------------------------------------
 
 @dataclass
 class MoEGeometry:
-    """对照床几何的参数化(内部实测记录 的几何表)。"""
+    """Parameterization of the control-testbed geometries (geometry table, internal measurement records)."""
     name: str
-    n_groups: int          # 组数 = 节点数(组即层级边界)
-    R: int                 # 组内卡数
+    n_groups: int          # number of groups = number of nodes (a group is the hierarchy boundary)
+    R: int                 # cards per group
     k: int                 # top-k
-    M: int                 # 组数上限
-    H: int = 2048          # 隐藏维
+    M: int                 # cap on groups per token
+    H: int = 2048          # hidden dim
     seq: int = 4096
     mbs: int = 1
     gbs: int = 512
-    moe_layers: int = 19   # 20 层 - 1 dense 首层
+    moe_layers: int = 19   # 20 layers - 1 dense first layer
     bytes_per_elem: int = 2   # bf16
 
     @property
@@ -120,12 +130,13 @@ class MoEGeometry:
 
     @property
     def microbatches(self) -> int:
-        # DP = EP(对照床恒真);GBS 均摊到 DP,再按 MBS 切
-        assert self.gbs % (self.ep * self.mbs) == 0, "GBS 不整除,床上会直接拦"
+        # DP = EP (always true on the control testbed); GBS spread over DP, then cut by MBS
+        assert self.gbs % (self.ep * self.mbs) == 0, "GBS not divisible; the testbed would reject this outright"
         return self.gbs // (self.ep * self.mbs)
 
     def calls_per_step_fwd(self) -> int:
-        # 内部实测记录:每步前向 dispatch 次数 = MoE 层数 x microbatch x 2(重算重放)
+        # internal measurement records: forward dispatch calls per step
+        # = MoE layers x microbatches x 2 (recompute replay)
         return self.moe_layers * self.microbatches * 2
 
     def calls_per_step_bwd(self) -> int:
@@ -134,13 +145,14 @@ class MoEGeometry:
     def row_bytes(self) -> int:
         return self.H * self.bytes_per_elem
 
-    # ---- 每 rank 每次调用发出的行数(内部实测记录 更正后的账;两侧都逐份发)----
+    # ---- rows sent per rank per call (corrected ledger, internal measurement records; both sides send every copy) ----
     def rows_one_hop(self) -> int:
         return self.tokens_per_rank * self.k
 
     def rows_hop_a(self) -> int:
-        # 每 (token, 入选组) 1 行;发往自己组那份是纯自拷贝、不过链路,
-        # 但缓冲里仍占一行(_send_index 布局)。链路账在 cost 侧扣。
+        # 1 row per (token, selected group); the copy going to the sender's own group is
+        # a pure self-copy that never crosses the link, but it still occupies a row in
+        # the buffer (_send_index layout). The wire ledger is deducted on the cost side.
         return self.tokens_per_rank * self.M
 
     def rows_hop_b(self) -> int:
@@ -148,17 +160,19 @@ class MoEGeometry:
 
 
 # ----------------------------------------------------------------------------
-# 策略成本
+# Strategy costs
 # ----------------------------------------------------------------------------
 
 def _a2a_ms(level: Level, world: int, total_rows: int, row_bytes: int,
             self_fraction: float) -> float:
-    """一次 a2a 的墙钟 [ms]。
+    """Wall clock of one a2a [ms].
 
-    total_rows 里 self_fraction 是自拷贝(不过链路);其余按每对端均匀,
-    时间 = α(world) + 过链路字节 / β(每对端字节)。
-    β 按**每对端字节**查表 —— 内部实测记录/内部实测记录:带宽对每对端消息尺寸敏感,
-    对齐(真实行宽的整数倍)口径下平坦,标定表就是这个口径。
+    Of total_rows, self_fraction is self-copy (never crosses the link); the rest spreads
+    uniformly per peer, time = alpha(world) + wire bytes / beta(per-peer bytes).
+    beta is looked up by **per-peer bytes** -- internal measurement records/internal
+    measurement records: bandwidth is sensitive to per-peer message size, flat under the
+    aligned convention (integer multiples of the real row width), and the calibration
+    table uses exactly that convention.
     """
     wire_rows = total_rows * (1.0 - self_fraction)
     wire_bytes = wire_rows * row_bytes
@@ -168,18 +182,20 @@ def _a2a_ms(level: Level, world: int, total_rows: int, row_bytes: int,
 
 
 def one_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
-    """厂商一跳:一次全域 a2a。自拷贝份额 = 1/EP(均匀路由期望)。"""
+    """Vendor one-hop: a single full-fabric a2a. Self-copy share = 1/EP (uniform-routing expectation)."""
     return _a2a_ms(c.flat, g.ep, g.rows_one_hop(), g.row_bytes(),
                    self_fraction=1.0 / g.ep)
 
 
 def two_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
-    """T-A2A 两跳(串行,与现实现一致;内部实测记录:无流水)。
+    """T-A2A two-hop (serial, matching the current implementation; internal measurement records: no pipelining).
 
-    Hop A:跨组域,world = n_groups;自拷贝份额 = 选中自己组的期望 M/n_groups
-           (那份 _send_index 恒等于发送方,纯本地,内部实测记录)。
-    Hop B:组内域,world = R;自拷贝 1/R。
-    额外:一次 splits 主机同步(两跳比一跳多一次变长交换)+ 本地到达链(按行)。
+    Hop A: cross-group domain, world = n_groups; self-copy share = M/n_groups, the
+           expectation of selecting one's own group (that copy's _send_index always
+           equals the sender -- purely local; internal measurement records).
+    Hop B: intra-group domain, world = R; self-copy 1/R.
+    Extra: one splits host sync (two-hop does one more variable-length exchange than
+           one-hop) + the local arrival chain (per row).
     """
     a = _a2a_ms(c.slow, g.n_groups, g.rows_hop_a(), g.row_bytes(),
                 self_fraction=g.M / g.n_groups if g.n_groups > 1 else 1.0)
@@ -190,10 +206,12 @@ def two_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
 
 
 def step_delta(c: ClusterSpec, g: MoEGeometry) -> dict:
-    """每步的通信差(on − off)[ms] 与 G 预测所需的分量。
+    """Per-step communication delta (on - off) [ms] plus the components the G prediction needs.
 
-    dispatch 与 combine 镜像(同字节、同结构,内部实测记录);反向重放前向的
-    splits(内部实测记录),次数减半。G 的合成在 validate 侧做(需要 off 臂实测步时)。
+    dispatch and combine mirror each other (same bytes, same structure; internal
+    measurement records); backward replays the forward splits (internal measurement
+    records) at half the call count. G is composed on the validate side (it needs the
+    off arm's measured step time).
     """
     per_call = two_hop_call(c, g) - one_hop_call(c, g)
     calls = 2 * (g.calls_per_step_fwd() + g.calls_per_step_bwd())   # x2: dispatch+combine

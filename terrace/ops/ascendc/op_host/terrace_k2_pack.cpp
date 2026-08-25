@@ -1,17 +1,23 @@
 /**
- * terrace_k2_pack -- host 侧:tiling + InferShape/InferDataType + 算子原型。
+ * terrace_k2_pack -- host side: tiling + InferShape/InferDataType + op prototype.
  *
- * K2(发送侧打包链)的三个坑位,build.sh 会用本文件覆盖 msopgen 骨架里的同名
- * stub(挂接 diff 见 terrace/ops/内部嫁接记录(未随仓发布);本算子尚未进 build.sh 的
- * OP_JSONS —— 嫁接时加,K1 热改期间不动既有文件)。功能规格与两遍法论证见
- * op_kernel/terrace_k2_pack.cpp 文件头。
+ * The three slots for K2 (the send-side pack chain); build.sh overwrites the
+ * same-named stubs in the msopgen skeleton with this file (the graft diff lives
+ * in the terrace/ops/ internal grafting notes (not published with this repo);
+ * this op is not yet in build.sh's OP_JSONS -- it gets added at graft time, and
+ * existing files stay untouched while K1 is under active modification).
+ * Functional spec and the two-pass argument live in the
+ * op_kernel/terrace_k2_pack.cpp file header.
  *
- * 形状契约(等配额快路径全形状静态 —— K2 免主机同步的本钱,plan_ta2a 的
- * n_rows = T*M 论证原文见 terrace/ta2a.py):
- *   hidden [T, H], expert_idx [T, k], gates [T, k](gates 与 hidden 同 dtype,
- *   C1 圆整点契约,见 _pack_quota_wire 的 gate-plane-from-payload 论证)
- *   -> payload [T*M, H], mask [T*M, quota](升序槽号表), gate_rows [T*M, quota],
- *      u_src [T*M], node_counts [world/rpn];quota = k / groups_m,M = groups_m。
+ * Shape contract (every shape is static on the equal-quota fast path -- this is
+ * what buys K2 its freedom from host synchronization; the original
+ * n_rows = T*M argument for plan_ta2a is in terrace/ta2a.py):
+ *   hidden [T, H], expert_idx [T, k], gates [T, k] (gates shares hidden's dtype,
+ *   the C1 rounding-point contract; see the gate-plane-from-payload argument in
+ *   _pack_quota_wire)
+ *   -> payload [T*M, H], mask [T*M, quota] (ascending slot-id table),
+ *      gate_rows [T*M, quota], u_src [T*M], node_counts [world/rpn];
+ *      quota = k / groups_m, M = groups_m.
  */
 #include "terrace_k2_pack_tiling.h"
 #include "register/op_def_registry.h"
@@ -19,24 +25,25 @@
 
 namespace optiling {
 
-// 第 1 遍 expert_idx staging 的每块 int64 数:4 的倍数(int32 视图下 4 个 int64 =
-// 32B 对齐),2048 = 16KB UB。载荷行 tile 上限 8192 元素(bf16 16KB x double buffer)。
+// int64 count per chunk for pass-1 expert_idx staging: multiple of 4 (4 int64 =
+// 32B aligned under the int32 view), 2048 = 16KB UB. Payload-row tile capped at
+// 8192 elements (bf16 16KB x double buffer).
 constexpr uint32_t IDX_CHUNK = 2048;
 constexpr uint32_t ROW_TILE_MAX = 8192;
 constexpr uint32_t ALIGN_BYTES = 32;
-constexpr uint32_t MAX_NODES = 256;   // kernel 直方图数组上限(参考工作点 512die/rpn8 = 64)
-constexpr uint32_t MAX_K = 64;        // kernel 行内排序数组上限(现档 k<=8)
+constexpr uint32_t MAX_NODES = 256;   // kernel histogram-array cap (reference operating point 512die/rpn8 = 64)
+constexpr uint32_t MAX_K = 64;        // kernel in-row sort-array cap (current tiers have k<=8)
 
 static ge::graphStatus TilingFunc(gert::TilingContext *context)
 {
     TerraceK2PackTilingData tiling;
     auto platform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    uint32_t aivNum = platform.GetCoreNumAiv();   // 910C 实测为准(构建脚本 ascendc/build.sh 的头注)
+    uint32_t aivNum = platform.GetCoreNumAiv();   // trust the 910C measured value (header comment of the build script ascendc/build.sh)
     if (aivNum == 0) {
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 输入形状 ----
+    // ---- input shapes ----
     const gert::StorageShape *hidShape = context->GetInputShape(0);
     const gert::StorageShape *idxShape = context->GetInputShape(1);
     const gert::StorageShape *gateShape = context->GetInputShape(2);
@@ -57,7 +64,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 属性 ----
+    // ---- attributes ----
     const gert::RuntimeAttrs *attrs = context->GetAttrs();
     if (attrs == nullptr) {
         return ge::GRAPH_FAILED;
@@ -70,10 +77,13 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         groupsM == nullptr) {
         return ge::GRAPH_FAILED;
     }
-    // fail loud:属性与张量几何必须自洽。逐条对应现链的硬前提:
-    //   world%rpn / nE%world 整除(几何定义);k%M 整除(等额配额,ta2a_fwd 的
-    //   assert 同款);slots<=63(int64 掩码时代的硬约束,C1 槽号表沿用其数值域);
-    //   nNodes/k 的数组上限(kernel 标量数组);nE/T*k < 2^31(int32 lo 词契约)。
+    // fail loud: attributes must be consistent with the tensor geometry. Each
+    // clause maps to a hard precondition of the current chain:
+    //   world%rpn / nE%world divisibility (geometry definitions); k%M
+    //   divisibility (equal quota, same assert as ta2a_fwd); slots<=63 (hard
+    //   bound from the int64-mask era; the C1 slot-id table keeps its numeric
+    //   domain); nNodes/k array caps (kernel scalar arrays); nE/T*k < 2^31
+    //   (int32 lo-word contract).
     if (*world <= 0 || *rpn <= 0 || *groupsM <= 0 || *nExperts <= 0 ||
         (*world) % (*rpn) != 0 || (*nExperts) % (*world) != 0 ||
         K % (*groupsM) != 0) {
@@ -93,18 +103,21 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
         return ge::GRAPH_FAILED;
     }
 
-    // ---- 载荷行对齐:H*esize 必须 32B 整除(真实 hidden 2048/7168 恒真)----
+    // ---- payload-row alignment: H*esize must be divisible by 32B (always true
+    // for the real hidden sizes 2048/7168) ----
     int64_t esizeRaw = ge::GetSizeByDataType(context->GetInputDesc(0)->GetDataType());
     if (esizeRaw <= 0) {
         return ge::GRAPH_FAILED;
     }
     uint32_t esize = static_cast<uint32_t>(esizeRaw);
     if ((static_cast<uint64_t>(H) * esize) % ALIGN_BYTES != 0) {
-        return ge::GRAPH_FAILED;   // fail loud;torch 侧 csrc 先行拦截并给人话报错
+        return ge::GRAPH_FAILED;   // fail loud; the torch-side csrc intercepts first with a human-readable error
     }
 
-    // ---- 切核:token 连续均分(稳定序的核间前提,见 kernel 文件头论证;按 token
-    // 而非按平铺槽位切,run 不跨核,第 2 遍不需要跨核拼行)----
+    // ---- core split: tokens divided contiguously and evenly (the inter-core
+    // prerequisite for stable ordering, see the kernel file-header argument;
+    // split by token rather than by flattened slot so a run never crosses cores
+    // and pass 2 never has to stitch rows across cores) ----
     uint32_t usedCores = aivNum;
     if (T < static_cast<int64_t>(usedCores)) {
         usedCores = (T > 0) ? static_cast<uint32_t>(T) : 1;
@@ -133,7 +146,8 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context)
                         context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
 
-    // 游标法零核间同步,无自定义 workspace;系统 workspace 照样板保留。
+    // Cursor method, zero inter-core synchronization, no custom workspace; the
+    // system workspace stays as in the template.
     size_t *currentWorkspace = context->GetWorkspaceSizes(1);
     currentWorkspace[0] = platform.GetLibApiWorkSpaceSize();
     return ge::GRAPH_SUCCESS;
@@ -188,7 +202,7 @@ static ge::graphStatus InferShape(gert::InferShapeContext *context)
 static ge::graphStatus InferDataType(gert::InferDataTypeContext *context)
 {
     context->SetOutputDataType(0, context->GetInputDataType(0));   // payload ~ hidden
-    context->SetOutputDataType(1, ge::DT_INT64);                   // mask(槽号表)
+    context->SetOutputDataType(1, ge::DT_INT64);                   // mask (slot-id table)
     context->SetOutputDataType(2, context->GetInputDataType(2));   // gate_rows ~ gates
     context->SetOutputDataType(3, ge::DT_INT64);                   // u_src
     context->SetOutputDataType(4, ge::DT_INT64);                   // node_counts
@@ -203,11 +217,13 @@ class TerraceK2Pack : public OpDef {
 public:
     explicit TerraceK2Pack(const char *name) : OpDef(name)
     {
-        // dtype 组合按位置对应:bf16 主线,fp16/fp32 陪跑(与 K1 同策)。gates 与
-        // hidden 同位组合 == 同 dtype 强制:C1 的 gate 平面从 payload 派生
-        // (_pack_quota_wire),失配必须大声死,不许静默送更宽的 gate 平面上线。
-        // expert_idx 是 int64 **存储**平面 —— kernel 内以 int32 对标量访问,
-        // 不发 int64 向量指令(910C 边界,见 kernel 文件头)。
+        // dtype combos correspond by position: bf16 is the main line, fp16/fp32
+        // ride along (same policy as K1). gates paired position-wise with hidden
+        // == same-dtype enforcement: the C1 gate plane is derived from the
+        // payload (_pack_quota_wire); a mismatch must die loudly, never silently
+        // ship a wider gate plane. expert_idx is an int64 **storage** plane --
+        // the kernel accesses it as int32 scalars and issues no int64 vector
+        // instructions (910C boundary, see the kernel file header).
         this->Input("hidden")
             .ParamType(REQUIRED)
             .DataType({ge::DT_FLOAT16, ge::DT_BF16, ge::DT_FLOAT})
@@ -255,7 +271,8 @@ public:
 
         this->SetInferShape(ge::InferShape).SetInferDataType(ge::InferDataType);
 
-        // soc 串占位与 passthrough/K1 同策:build.sh 从骨架 stub 抓权威值替换。
+        // The soc string placeholder follows the passthrough/K1 policy: build.sh
+        // grabs the authoritative value from the skeleton stub and substitutes it.
         this->AICore().SetTiling(optiling::TilingFunc).AddConfig("ascend910b");
     }
 };
