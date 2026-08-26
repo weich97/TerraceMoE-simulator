@@ -262,3 +262,49 @@ def test_tier1b_cross_corpus_gate_passes_on_both_machines():
         ia["median"], ia["bias"], ia["outlier_fraction"])
     assert ok_b, "machine B: median %.3f bias %+.3f outliers %.2f" % (
         ib["median"], ib["bias"], ib["outlier_fraction"])
+
+
+# ---------------------------------------------------------------- compute model
+
+
+def test_compute_roofline_is_non_monotone_and_penalises_small_gemms():
+    """The measured curve peaks at 4096 and dips after it; small GEMMs pay heavily.
+
+    Pinned because the dip is a real measured feature reproduced across two
+    campaigns. If someone replaces the table with a smooth monotone fit, this
+    fails -- which is the point: the smoothing would erase the finding.
+    """
+    from sim.compute import GEMM_TFLOPS, PEAK_TFLOPS, achieved_tflops
+    tbl = dict(GEMM_TFLOPS)
+    assert tbl[4096] == PEAK_TFLOPS
+    assert tbl[8192] < tbl[4096] and tbl[12288] < tbl[4096]
+    assert tbl[1024] / PEAK_TFLOPS < 0.5, "the 1024 tier must stay under half of peak"
+    assert achieved_tflops(500) == tbl[1024], "below the measured range must clamp"
+    assert achieved_tflops(99999) == tbl[16384]
+
+
+def test_compute_time_is_bracketed_and_the_bracket_widens_for_narrow_experts():
+    """Compute time is a range, and the range is the finding.
+
+    A square roofline cannot decide the efficiency of a tall-skinny expert matmul.
+    Wide experts stay near 1.2x across the three index rules; narrow ones blow out
+    past 2x, which is where any single compute number becomes assumption-dominated.
+    If a future change collapses the narrow-expert spread, it means someone either
+    measured non-square GEMMs (update the module deliberately) or silently picked
+    one rule and dropped the honesty.
+    """
+    from sim.compute import expert_ffn
+    wide = expert_ffn(4096, 6, 128, 128, 2048, 2048)
+    narrow = expert_ffn(4096, 6, 128, 128, 2048, 512)
+    assert wide["assumption_spread"] < 1.3
+    assert narrow["assumption_spread"] > 2.0
+    assert narrow["ms_slow"] > narrow["ms_fast"] > 0
+    # FLOPs are exact, so halving expert width must halve the work exactly
+    assert abs(narrow["flops"] * 4 - wide["flops"]) < 1e-6 * wide["flops"]
+
+
+def test_comm_share_is_labelled_and_behaves_as_a_bound():
+    from sim.compute import comm_share_upper_bound
+    assert comm_share_upper_bound(1.0, 0.0) == 1.0
+    assert abs(comm_share_upper_bound(1.0, 3.0) - 0.25) < 1e-12
+    assert comm_share_upper_bound(0.0, 0.0) != comm_share_upper_bound(0.0, 0.0)  # nan

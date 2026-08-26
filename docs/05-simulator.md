@@ -194,6 +194,42 @@ preregistered window, so an x_half much above the fitted interval would fail the
 gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
 further drift shows up immediately.
 
+## The other half of the step: expert compute (`sim/compute.py`)
+
+Communication is only one side of an MoE step. A measured bf16 GEMM roofline (256
+samples per size, two independent campaigns) lets the repo say something about the
+other side — and, more usefully, say precisely where the data stops.
+
+| square GEMM | achieved TFLOPS | of peak |
+|---|---|---|
+| 1024 | 141.6 | **43%** |
+| 2048 | 271.1 | 83% |
+| 4096 | 327.4 | 100% |
+| 8192 | 296.7 | 91% |
+| 12288 | 291.4 | 89% |
+| 16384 | 319.2 | 97% |
+
+The curve is **not monotone** — it peaks at 4096 and dips through 8192–12288. That
+is measured and reproduced, so it is kept rather than smoothed into a tidy fit.
+Its headline for MoE: at 1024 the machine delivers 43% of its own peak, so narrow
+experts do not merely do less work, they do it *less efficiently*, and a FLOP count
+alone cannot see that.
+
+**Compute time comes out as a bracket, and the bracket is the result.** The
+roofline is square; an expert matmul is (rows × hidden × d_expert) with rows far
+larger than d_expert, and we never measured a non-square GEMM. Three defensible
+ways to index a square curve by a non-square shape — smallest dimension, geometric
+mean, row count — agree to **1.19×** when d_expert = hidden, and diverge to
+**2.25×** once d_expert ≤ hidden/2. So: for wide experts the compute number is
+usable; for the fine-grained MoE regime it is assumption-dominated and must be
+quoted as a range, or someone has to go measure tall-skinny GEMMs.
+
+**Compute is never added to communication.** The two overlap by an amount nothing
+on hand resolves — the same gap that keeps Tier-2 locked. `comm_share_upper_bound`
+gives communication's share *if nothing overlapped*, which is a bound useful for
+ranking geometries and for spotting regimes where communication cannot possibly
+dominate. It is not a predicted share, and the module refuses to present it as one.
+
 ## The Tier-2 step-level synthesis campaign record
 
 All six families of single-parameter global overlap models are dead; the negative result plus
@@ -216,6 +252,7 @@ written up as a protocol anyone with a cluster can run as-is.
 ```
 python -m sim.validate_micro     # Tier-1 gate
 python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines)
+python -m sim.compute            # expert-FFN roofline and the bracket it implies
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)
 python -m sim.overlap            # Tier-2 campaign: overlap model family battle report (docs/07)
