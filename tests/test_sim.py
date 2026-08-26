@@ -252,16 +252,32 @@ def test_tier1b_cross_corpus_gate_passes_on_both_machines():
     Machine B is the load-bearing half. Passing there is what licenses anyone else to
     re-calibrate this model on their own hardware; if it ever fails, the claim that the
     model *form* transfers has to be withdrawn, not patched.
+
+    Corpus C is the blind half: machine A at world 16, collected 2026-08-26, months
+    after every constant was frozen and at a world machine A had never been scored
+    at. Nothing was re-fitted for it. Its margin is the thinnest of the three and
+    that is recorded rather than smoothed -- if a future change buys machine B a
+    little accuracy by spending C's remaining margin, this fails.
     """
     from sim.calibrate import flat_supernode, second_machine
-    from sim.validate_sweep import TARGETS_A, TARGETS_B, validate_sweep
+    from sim.validate_sweep import (GATE_MEDIAN, TARGETS_A, TARGETS_B, TARGETS_C,
+                                    validate_sweep)
     ok_a, ia = validate_sweep(flat_supernode(), TARGETS_A, verbose=False)
     ok_b, ib = validate_sweep(second_machine(), TARGETS_B, verbose=False)
-    assert len(TARGETS_A) == 6 and len(TARGETS_B) == 44
+    ok_c, ic = validate_sweep(flat_supernode(), TARGETS_C, verbose=False)
+    assert len(TARGETS_A) == 6 and len(TARGETS_B) == 44 and len(TARGETS_C) == 12
     assert ok_a, "machine A: median %.3f bias %+.3f outliers %.2f" % (
         ia["median"], ia["bias"], ia["outlier_fraction"])
     assert ok_b, "machine B: median %.3f bias %+.3f outliers %.2f" % (
         ib["median"], ib["bias"], ib["outlier_fraction"])
+    assert ok_c, "machine A world 16 (blind): median %.3f bias %+.3f outliers %.2f" % (
+        ic["median"], ic["bias"], ic["outlier_fraction"])
+    assert ic["median"] > max(ia["median"], ib["median"]), (
+        "corpus C used to be the tightest fit of the three; if that changed, check "
+        "that it was not quietly refitted")
+    assert GATE_MEDIAN - ic["median"] < 0.02, (
+        "corpus C now clears the median gate by more than 2 points; the docs call it "
+        "the thinnest margin and would need updating")
 
 
 # ---------------------------------------------------------------- compute model

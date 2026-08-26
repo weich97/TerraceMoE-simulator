@@ -6,6 +6,14 @@ also what the calibration is anchored to -- internally consistent, but
 self-referential. Tier-1b closes that loop with an independent family: plain a2a
 size sweeps, on two machines, taken weeks apart by a different benchmark.
 
+There are now three corpora, and they are not equally informative. A and B were both
+available when the gate was written, so they test consistency. C was collected on
+2026-08-26, months after the constants were frozen, at a world machine A had never
+been scored at, and nothing was refitted for it -- so it tests prediction. It passes
+with the thinnest margin of the three, 11.3% against a 12% gate, and that is the
+honest reading: the model predicts an unseen world on a machine it knows, at roughly
+the accuracy the gate was set to demand and no better.
+
 ## What is being tested, precisely
 
 Machine A is the calibrated machine. Machine B is a second machine of the same
@@ -99,6 +107,29 @@ TARGETS_B = [
     (128, 1073741824, 9.9033, 2),
 ]
 
+# Machine A again, world 16, collected 2026-08-26 -- long after every constant in
+# calibrate.py was frozen, on a world machine A had never been validated at (its
+# other corpus is world 128 only), with the same benchmark and the same aligned
+# convention. This is the closest thing here to a blind test: the gate thresholds
+# below were preregistered, the constants were fixed months earlier, and this corpus
+# did not exist when either was written. It is scored on its own rather than pooled
+# into TARGETS_A, so the original six points keep working as the regression guard
+# they were written to be.
+TARGETS_C = [
+    (16, 32768, 0.1990, 1),
+    (16, 131072, 0.1942, 1),
+    (16, 524288, 0.1897, 1),
+    (16, 1048576, 0.1928, 1),
+    (16, 2097152, 0.1824, 1),
+    (16, 4194304, 0.1866, 1),
+    (16, 8388608, 0.1867, 1),
+    (16, 16777216, 0.2412, 1),
+    (16, 33554432, 0.3652, 1),
+    (16, 67108864, 0.6551, 1),
+    (16, 134217728, 1.2656, 1),
+    (16, 268435456, 2.4990, 1),
+]
+
 GATE_MEDIAN = 0.12
 GATE_OUTLIER_FRACTION = 0.20
 GATE_OUTLIER_THRESHOLD = 0.35
@@ -143,8 +174,10 @@ def main() -> None:
     from .calibrate import flat_supernode, second_machine
     ok_a, _ = validate_sweep(flat_supernode(), TARGETS_A, "machine A (calibrated)")
     ok_b, _ = validate_sweep(second_machine(), TARGETS_B, "machine B (re-fitted)")
+    ok_c, _ = validate_sweep(flat_supernode(), TARGETS_C,
+                             "machine A, world 16, collected after the freeze")
     print()
-    print("Tier-1b overall: %s" % ("PASS" if (ok_a and ok_b) else "FAIL"))
+    print("Tier-1b overall: %s" % ("PASS" if (ok_a and ok_b and ok_c) else "FAIL"))
 
 
 if __name__ == "__main__":

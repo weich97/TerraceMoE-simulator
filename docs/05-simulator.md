@@ -21,13 +21,15 @@ measure  ->  calibrate  ->  validate  ->  extrapolate
    - **Tier-1 (communication micro level)**: against directly measured one-hop/two-hop times on
      the same machine — median relative error ≤20%, max ≤35%, crossover position reproduced.
      **Current: pass** (2.8% / 24.5% / 4096–8192).
-   - **Tier-1b (cross-corpus, `sim/validate_sweep.py`)**: the same model against 50 distilled
+   - **Tier-1b (cross-corpus, `sim/validate_sweep.py`)**: the same model against 62 distilled
      targets from a *different* benchmark family on **two machines** — the calibrated one, and
      a second one whose constants are all re-fitted so only the model form is shared. Gate:
      median relative error ≤12%, at most 1 in 5 targets over 35%, median signed error within
-     ±8%. **Current: pass** (machine A 1.9% median over 6 targets; machine B 9.3% median over
-     44, bias −1.1%). It is a regression guard written after the calibration, not evidence for
-     it — Tier-1 remains the gate that had to be passed blind.
+     ±8%. **Current: pass** on all three corpora (machine A 1.9% median over 6 targets;
+     machine B 9.3% over 44, bias −1.1%; machine A at world 16, collected 2026-08-26 after
+     the constants were frozen, 11.3% over 12, bias −0.9%). The first two are a regression
+     guard written after the calibration; the third is the one that had nothing fitted to it
+     and clears the gate by 0.7 points, the thinnest margin of the three.
    - **Tier-2 (end-to-end step level)**: against measured G on 7 training geometries
      (1 calibration, 6 holdout; n4 is a scale-axis point added after preregistration).
      **Current: fail — step-level extrapolation stays locked.** The cause, named: the sum of
@@ -169,7 +171,7 @@ level keeps a flat β, because its value is physics-endorsed (link aggregation,
 
 The result: **Tier-1 median error drops from 8.1% to 2.8%** (worst 12.5% → 24.5%, still
 inside the 35% gate), and the entire bootstrap interval of x_half passes it (30 KiB → 2.5%,
-87 KiB → 5.0%). Tier-1b then confirms the model on 50 targets from a different benchmark
+87 KiB → 5.0%). Tier-1b then confirms the model on 62 targets from a different benchmark
 family across two machines. The
 extrapolated ratios move up 4–5% — two-hop's messages are larger per peer, so it
 suffers less from saturation than one-hop does.
@@ -302,7 +304,7 @@ written up as a protocol anyone with a cluster can run as-is.
 
 ```
 python -m sim.validate_micro     # Tier-1 gate
-python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines)
+python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines, three corpora)
 python -m sim.compute            # expert-FFN roofline and the bracket it implies
 python -m sim.imbalance         # routing skew: how much it favours two-hop
 python -m sim.platforms          # calibrated platforms + where the methods pay off
