@@ -23,9 +23,28 @@ plt.rcParams.update({
     "figure.dpi": 100,
 })
 
-OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "docs", "assets")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "docs", "assets")
 os.makedirs(OUT, exist_ok=True)
+
+# Set TERRACE_FIG_PDF=1 to also emit PDFs into paper/figures for LaTeX. GitHub
+# renders the SVGs and Overleaf needs vector PDF; both come from this one script so
+# a figure in the paper can never drift from the same figure in the repository.
+PDF_DIR = os.path.join(ROOT, "paper", "figures") if os.environ.get("TERRACE_FIG_PDF") else None
+if PDF_DIR:
+    os.makedirs(PDF_DIR, exist_ok=True)
+_savefig = plt.Figure.savefig
+
+
+def _savefig_both(self, fname, *a, **kw):
+    _savefig(self, fname, *a, **kw)
+    if PDF_DIR and str(fname).endswith(".svg"):
+        kw.pop("metadata", None)
+        _savefig(self, os.path.join(PDF_DIR,
+                 os.path.basename(str(fname))[:-4] + ".pdf"), *a, **kw)
+
+
+plt.Figure.savefig = _savefig_both
 
 C = {"gl": "#5B8DB8", "qo": "#C4823B", "full": "#3A7D5C", "base": "#8A8F98"}
 MODES3 = ["group_limited\n(group limit only)", "quota_only\n(equal quota only = MoGE)", "full\n(T-Route)"]

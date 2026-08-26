@@ -43,6 +43,25 @@ plt.rcParams.update({
 OUT = os.path.join(ROOT, "docs", "assets")
 os.makedirs(OUT, exist_ok=True)
 
+# PDF_TOO: set TERRACE_FIG_PDF=1 to also emit PDFs into paper/figures for LaTeX.
+# GitHub renders the SVGs; Overleaf needs vector PDF, and both come from this one
+# script so a figure in the paper can never drift from the same figure in the repo.
+PDF_DIR = os.path.join(ROOT, "paper", "figures") if os.environ.get("TERRACE_FIG_PDF") else None
+if PDF_DIR:
+    os.makedirs(PDF_DIR, exist_ok=True)
+_savefig = plt.Figure.savefig
+
+
+def _savefig_both(self, fname, *a, **kw):
+    _savefig(self, fname, *a, **kw)
+    if PDF_DIR and str(fname).endswith(".svg"):
+        kw.pop("metadata", None)
+        _savefig(self, os.path.join(PDF_DIR,
+                 os.path.basename(str(fname))[:-4] + ".pdf"), *a, **kw)
+
+
+plt.Figure.savefig = _savefig_both
+
 C = {"m0": "#8A8F98", "m1": "#B48EAD", "m2": "#5B8DB8", "m3": "#C4823B",
      "m4": "#3A7D5C", "m5": "#B35A5A", "band": "#5B8DB8"}
 
