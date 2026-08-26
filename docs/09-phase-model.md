@@ -102,6 +102,34 @@ fact.
 Everything beyond the minimum buys holdouts, not mechanism: 4–6 more geometries
 across the three axes, same protocol, to satisfy step 5.
 
+## A second, much cheaper measurement: separating launch from fabric
+
+The shipped `alpha(world)` lumps the per-call launch cost together with the
+collective's own fixed cost, because nothing here separates them. Splitting them
+matters in principle, since two-hop issues one more collective than one-hop and
+launch is per call rather than per world, and because a device-initiated stack has a
+very different launch cost: measured here at 36 to 57 microseconds for a kernel-side
+put against 257 to 268 for a host-side point-to-point.
+
+**The scan.** One node, eight ranks, minutes. Issue N back-to-back tiny collectives
+at fixed world without synchronising between them, for N over a decade, and fit time
+against N. The slope is the per-call cost that cannot be pipelined away, the
+intercept is what a single call costs beyond it. Repeat at world 8 and 16 to check
+that the per-call term really is world-independent, which is the assumption the split
+rests on.
+
+**Do it only when a node is free anyway.** The sensitivity is already bounded without
+it: launch cannot exceed `alpha(8) = 111` microseconds, since the smallest measured
+alpha contains both terms, and sweeping the whole plausible range moves the breakeven
+hierarchy ratio from 1.45 to 1.78, reaching only 1.60 at that bound. Against the
+arrival chain, which moves the same quantity from 3.87 to 1.45, this is second order.
+`sim/profile.py::launch_sensitivity` reproduces the sweep.
+
+**What the scan would not settle.** Whether to adopt a device-initiated dispatch
+stack. That removes the host from the critical path and therefore changes overlap,
+which is exactly the gap this page exists to close. The launch scan tightens a small
+known term; the overlap protocol above is what answers the interesting question.
+
 ## What it would unlock
 
 Tier-2 currently blocks all step-level extrapolation, which is why the platform

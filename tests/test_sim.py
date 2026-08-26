@@ -443,3 +443,33 @@ def test_core_does_not_apply_skew():
     assert "imbalance" not in src, (
         "core.py imported the skew model. Tier-1 targets come from an equal-split "
         "benchmark; applying skew there would fail the gate for the right reason.")
+
+
+def test_launch_cost_is_bounded_and_second_order():
+    """The unmeasured launch split must stay a small term, and stay bounded.
+
+    Two-hop issues one more collective, so launch enters the comparison exactly
+    once. The bound is alpha(8), the smallest measured alpha, since that value
+    already contains both launch and the collective's own fixed cost. If this ever
+    becomes a large term the conclusion changes and the call-count scan in docs/09
+    stops being optional.
+    """
+    from sim.core import MoEGeometry
+    from sim.profile import LAUNCH_UPPER_BOUND_MS, launch_sensitivity
+    from sim.calibrate import ALPHA_PTS
+    from sim.sweep import CHAIN_SCENARIOS
+
+    assert LAUNCH_UPPER_BOUND_MS == dict(ALPHA_PTS)[8], (
+        "the bound must stay tied to the smallest measured alpha")
+    g = MoEGeometry(name="lat", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    rows = launch_sensitivity(g, CHAIN_SCENARIOS[1][1])
+    assert rows[0]["extra_launch_ms"] == 0.0
+    bes = [r["breakeven"] for r in rows]
+    assert bes == sorted(bes), "more launch cost must never lower the breakeven"
+    at_bound = next(r for r in rows
+                    if abs(r["extra_launch_ms"] - LAUNCH_UPPER_BOUND_MS) < 1e-9)
+    assert at_bound["breakeven"] - bes[0] < 0.4, (
+        "launch moved the breakeven by %.2f, which is no longer second order "
+        "against the arrival chain's 2.4; run the scan"
+        % (at_bound["breakeven"] - bes[0]))

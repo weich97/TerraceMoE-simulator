@@ -155,6 +155,63 @@ def check(ratio: float, R: int, k: int, M: int, ep: int,
     return out
 
 
+# Per-call launch cost, measured on the paths we have instrumented:
+#   device-initiated kernel put   36-57 us   (one-sided bench floor, 7 serial puts)
+#   host-initiated point-to-point 257-268 us (PyTorch cross-device copy_)
+#   host readback of split sizes  44 us      (already a separate term in core.py)
+# The shipped alpha(world) lumps launch together with the collective's own fixed
+# cost, because no measurement here separates them; doing so needs a call-count
+# scan at fixed world, which is one node and a few minutes but has not been run.
+# What we can say without it: launch <= alpha(8) = 111 us, since the smallest
+# measured alpha contains both.
+LAUNCH_UPPER_BOUND_MS = 0.111
+LAUNCH_DEVICE_INITIATED_MS = (0.036, 0.057)
+LAUNCH_HOST_P2P_MS = (0.257, 0.268)
+
+
+def launch_sensitivity(geom, chain_us_per_row: float,
+                       deltas_ms=(0.0, 0.04, 0.08, 0.111, 0.16, 0.25)) -> list:
+    """How much the unmeasured launch split could move the verdict.
+
+    Two-hop issues one more collective than one-hop, so a change of launch cost
+    shifts the comparison by exactly one launch. Sweeping that one term over its
+    whole plausible range answers whether measuring it properly is worth machine
+    time. On the reference geometry it is not: the breakeven moves 1.45 to 1.78
+    across the full sweep and only to 1.60 at the defensible upper bound, against
+    3.87 to 1.45 for the arrival chain.
+
+    The sweep does **not** answer whether to adopt a device-initiated stack. That
+    also changes overlap, since the host leaves the critical path, and overlap is
+    the Tier-2 gap this repository cannot price.
+    """
+    from .calibrate import synthetic
+    from .core import one_hop_call, two_hop_call
+
+    out = []
+    for d in deltas_ms:
+        lo, hi = 1.0, 32.0
+
+        def ratio(r):
+            c = synthetic(r, chain_us_per_row=chain_us_per_row)
+            return one_hop_call(c, geom) / (two_hop_call(c, geom) + d)
+
+        if ratio(lo) >= 1.0:
+            be = lo
+        elif ratio(hi) < 1.0:
+            be = hi
+        else:
+            for _ in range(40):
+                mid = (lo + hi) / 2.0
+                if ratio(mid) >= 1.0:
+                    hi = mid
+                else:
+                    lo = mid
+            be = hi
+        out.append({"extra_launch_ms": d, "breakeven": be,
+                    "ratio_at_3.2": ratio(3.2), "ratio_at_8": ratio(8.0)})
+    return out
+
+
 def verdict(conditions) -> dict:
     failed = [c for c in conditions if not c.passed]
     return {"qualifies": not failed,
