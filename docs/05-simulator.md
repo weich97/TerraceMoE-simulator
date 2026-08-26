@@ -21,15 +21,16 @@ measure  ->  calibrate  ->  validate  ->  extrapolate
    - **Tier-1 (communication micro level)**: against directly measured one-hop/two-hop times on
      the same machine — median relative error ≤20%, max ≤35%, crossover position reproduced.
      **Current: pass** (2.8% / 24.5% / 4096–8192).
-   - **Tier-1b (cross-corpus, `sim/validate_sweep.py`)**: the same model against 62 distilled
+   - **Tier-1b (cross-corpus, `sim/validate_sweep.py`)**: the same model against 64 distilled
      targets from a *different* benchmark family on **two machines** — the calibrated one, and
      a second one whose constants are all re-fitted so only the model form is shared. Gate:
      median relative error ≤12%, at most 1 in 5 targets over 35%, median signed error within
      ±8%. **Current: pass** on all three corpora (machine A 1.9% median over 6 targets;
      machine B 9.3% over 44, bias −1.1%; machine A at world 16, collected 2026-08-26 after
-     the constants were frozen, 11.3% over 12, bias −0.9%). The first two are a regression
-     guard written after the calibration; the third is the one that had nothing fitted to it
-     and clears the gate by 0.7 points, the thinnest margin of the three.
+     the constants were frozen, 8.0% over 14, bias −2.0%). The first two are a regression
+     guard written after the calibration; the third had nothing fitted to it. A fourth
+     corpus, machine A at world 8, **fails** at 15.1% and −9.1%; it is reported as a drift
+     probe on α(8) and held out of the conjunction, with the reasoning below.
    - **Tier-2 (end-to-end step level)**: against measured G on 7 training geometries
      (1 calibration, 6 holdout; n4 is a scale-axis point added after preregistration).
      **Current: fail — step-level extrapolation stays locked.** The cause, named: the sum of
@@ -171,7 +172,7 @@ level keeps a flat β, because its value is physics-endorsed (link aggregation,
 
 The result: **Tier-1 median error drops from 8.1% to 2.8%** (worst 12.5% → 24.5%, still
 inside the 35% gate), and the entire bootstrap interval of x_half passes it (30 KiB → 2.5%,
-87 KiB → 5.0%). Tier-1b then confirms the model on 62 targets from a different benchmark
+87 KiB → 5.0%). Tier-1b then confirms the model on 64 targets from a different benchmark
 family across two machines. The
 extrapolated ratios move up 4–5% — two-hop's messages are larger per peer, so it
 suffers less from saturation than one-hop does.
@@ -197,23 +198,42 @@ gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
 further drift shows up immediately.
 
 **How much room x_half actually has, measured against the gates rather than the
-fit.** The bootstrap interval [30, 87] KiB is the spread of a fit to one corpus.
-Sweeping x_half and rerunning every gate gives a different and tighter number:
-**all four gates pass only for x_half in [46, 76] KiB** (`X_HALF_ADMISSIBLE`, with
-the endpoints pinned by a test). Both ends are set by corpora nothing was fitted to
-— the machine A world-16 sweep collected after the freeze rules out the low end, and
-machine B rules out the high end. The shipped 54 KiB was chosen before either check
-and is left where it is, off the centre of that interval on purpose: recentring it
-would be fitting a constant to the gates that are supposed to judge it.
+fit.** Sweeping x_half and rerunning every gate gives a **one-sided** answer:
+machine B rules out anything above **77 KiB** (`X_HALF_GATE_UPPER`, pinned by a
+test), and nothing rules out the low end — 1 KiB passes every gate, because below
+the knee β_eff is just β∞ across the payload range the corpora cover. So the gates
+corroborate the upper half of the bootstrap interval [30, 87] KiB and are silent
+about the lower half. x_half stays weakly determined, and that is consistent with
+`sim/fit.py`'s identifiability caveat rather than a surprise.
 
-That check also disposes of an attempt that did not work. Two dense 13-size sweeps
+An earlier revision of this page claimed a two-sided interval of [46, 76] KiB. That
+lower bound came from a single-run version of the world-16 corpus; repeating the
+sweep six times and taking medians dissolved it. Worth stating plainly, because the
+error ran the flattering way: **an admissibility interval computed from a noisy
+corpus comes out too tight, and reads as a stronger result than the data supports.**
+
+The same sweeps disposed of an attempt that did not work. Two dense 13-size sweeps
 were taken on the calibrated machine specifically to re-fit x_half from its own data
-and retire the borrow. They could not: single-run points in the mid range scatter
-badly enough (one 8 MB point came in 2.7× slower than the 16 MB point beside it)
-that the pinned-α fit lands at x_half above 1 MiB with β∞ at 152–168 GB/s, against
-an asymptote of 103 GB/s directly visible at the largest size in the same sweep.
-That is the α/x_half degeneracy reappearing on a noisy corpus, not a measurement,
-and nothing from it is shipped. **x_half remains a borrowed shape.**
+and retire the borrow. They could not, even at 12-sweep medians: the pinned-α fit
+lands at x_half above 500 KiB with β∞ at 153 GB/s, against an asymptote of 103 GB/s
+directly visible at the largest size in the same sweep. That is the α/x_half
+degeneracy on a corpus whose small sizes are almost pure α, not a measurement, and
+nothing from it is shipped. **x_half remains a borrowed shape.**
+
+**And one gate now fails.** Those same world-8 medians, scored as a fourth Tier-1b
+corpus, miss at 15.1% median with a −9.1% bias. The miss is localised: below 8 MB,
+where α is 76–97% of the prediction, the model runs 18% fast; above it the wire term
+dominates and it runs 10% slow. That is one number, α(8) = 0.111, against 0.128
+measured the same day by the independent call-count scan. Setting α(8) to the
+measured value clears the corpus (9.3%, −0.8%) and keeps Tier-1 green at 4.9%
+against its 20% gate. **The constant is not changed**: both readings are direct
+measurements of the same machine 15% apart, which is inside the documented 20%
+drift, and the choice moves the breakeven ratio by under 2.1% (3.87 → 3.89 on the
+measured chain, 1.45 → 1.47 fused). Retuning a constant to green a newly added
+corpus, at the cost of the one gate that was passed blind, is the failure mode the
+tiering exists to prevent. The corpus ships red, with the cause, held out of the
+Tier-1b conjunction because it probes one constant's drift rather than the model
+form.
 
 ## Payload: what the model varies, and what it deliberately does not
 

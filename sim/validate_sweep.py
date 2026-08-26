@@ -116,18 +116,61 @@ TARGETS_B = [
 # into TARGETS_A, so the original six points keep working as the regression guard
 # they were written to be.
 TARGETS_C = [
-    (16, 32768, 0.1990, 1),
-    (16, 131072, 0.1942, 1),
-    (16, 524288, 0.1897, 1),
-    (16, 1048576, 0.1928, 1),
-    (16, 2097152, 0.1824, 1),
-    (16, 4194304, 0.1866, 1),
-    (16, 8388608, 0.1867, 1),
-    (16, 16777216, 0.2412, 1),
-    (16, 33554432, 0.3652, 1),
-    (16, 67108864, 0.6551, 1),
-    (16, 134217728, 1.2656, 1),
-    (16, 268435456, 2.4990, 1),
+    (16, 32768, 0.1870, 6),
+    (16, 65536, 0.1706, 6),
+    (16, 131072, 0.1766, 6),
+    (16, 262144, 0.1694, 6),
+    (16, 524288, 0.1758, 6),
+    (16, 1048576, 0.1896, 6),
+    (16, 2097152, 0.1815, 6),
+    (16, 4194304, 0.1797, 6),
+    (16, 8388608, 0.1948, 6),
+    (16, 16777216, 0.2303, 6),
+    (16, 33554432, 0.3650, 6),
+    (16, 67108864, 0.6601, 6),
+    (16, 134217728, 1.2621, 6),
+    (16, 268435456, 2.4995, 6),
+]
+
+# Corpus D: the same machine and the same benchmark at world 8, medians of twelve
+# sweeps, six on each of two nodes. It is here because it **fails**, and because the
+# failure is diagnostic rather than mysterious.
+#
+# Scored against the shipped constants it gives 15.1% median error with a -9.1%
+# bias, missing the gate on both counts. The bias is not spread across the corpus:
+# below 8 MB, where alpha is 76-97% of the prediction, the model runs 18% fast;
+# above it, where the wire term dominates, it runs 10% slow. That localises the
+# whole failure to one number, alpha(8) = 0.111, and an independent call-count scan
+# on the same day put the world-8 fixed cost at 0.128 (sim/profile.py). Set alpha(8)
+# to that measured value and this corpus passes at 9.3% with a -0.8% bias, Tier-1
+# stays green at 4.9% against its 20% gate, and the other three corpora do not move.
+#
+# **The constant is not changed.** Both readings are direct measurements of the same
+# machine taken months apart, they differ by 15%, and this file documents 20%
+# run-to-run drift, so neither supersedes the other. What settles it is that nothing
+# depends on the choice: the breakeven ratio moves from 3.87 to 3.89 on the measured
+# chain and 1.45 to 1.47 fused, under 2.1% either way. Retuning alpha(8) to make a
+# newly added corpus pass, at the cost of the one gate that was passed blind, is the
+# failure mode the tiering exists to prevent. So the corpus ships red, the cause
+# ships with it, and tests/test_sim.py pins both.
+#
+# Corpus D is therefore reported but held out of the Tier-1b conjunction: it is a
+# drift probe on one constant, not a verdict on the model form, and letting it turn
+# the cross-machine gate red would say something the evidence does not support.
+TARGETS_D = [
+    (8, 32768, 0.1589, 12),
+    (8, 65536, 0.1513, 12),
+    (8, 131072, 0.1558, 12),
+    (8, 262144, 0.1417, 12),
+    (8, 524288, 0.1490, 12),
+    (8, 1048576, 0.1403, 12),
+    (8, 2097152, 0.1429, 12),
+    (8, 4194304, 0.1492, 12),
+    (8, 8388608, 0.1612, 12),
+    (8, 16777216, 0.1859, 12),
+    (8, 33554432, 0.3159, 12),
+    (8, 67108864, 0.5852, 12),
+    (8, 134217728, 1.1409, 12),
 ]
 
 GATE_MEDIAN = 0.12
@@ -178,6 +221,15 @@ def main() -> None:
                              "machine A, world 16, collected after the freeze")
     print()
     print("Tier-1b overall: %s" % ("PASS" if (ok_a and ok_b and ok_c) else "FAIL"))
+    print()
+    ok_d, _ = validate_sweep(flat_supernode(), TARGETS_D,
+                             "machine A, world 8 -- DRIFT PROBE, held out of the "
+                             "conjunction above")
+    if not ok_d:
+        print("  expected: the miss is alpha(8), 0.111 tabulated against 0.128 measured")
+        print("  the same day; adopting 0.128 clears it and moves the breakeven by")
+        print("  under 2.1%, so the constant is left alone. See the comment on")
+        print("  TARGETS_D and tests/test_sim.py.")
 
 
 if __name__ == "__main__":

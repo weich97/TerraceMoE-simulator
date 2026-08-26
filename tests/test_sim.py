@@ -255,43 +255,76 @@ def test_tier1b_cross_corpus_gate_passes_on_both_machines():
 
     Corpus C is the blind half: machine A at world 16, collected 2026-08-26, months
     after every constant was frozen and at a world machine A had never been scored
-    at. Nothing was re-fitted for it. Its margin is the thinnest of the three and
-    that is recorded rather than smoothed -- if a future change buys machine B a
-    little accuracy by spending C's remaining margin, this fails.
+    at. Nothing was re-fitted for it, and each of its points is the median of six
+    repeated sweeps because a single-run version of the same corpus proved noisy
+    enough to fabricate a result (see the x_half test).
     """
     from sim.calibrate import flat_supernode, second_machine
-    from sim.validate_sweep import (GATE_MEDIAN, TARGETS_A, TARGETS_B, TARGETS_C,
-                                    validate_sweep)
+    from sim.validate_sweep import (TARGETS_A, TARGETS_B, TARGETS_C, validate_sweep)
     ok_a, ia = validate_sweep(flat_supernode(), TARGETS_A, verbose=False)
     ok_b, ib = validate_sweep(second_machine(), TARGETS_B, verbose=False)
     ok_c, ic = validate_sweep(flat_supernode(), TARGETS_C, verbose=False)
-    assert len(TARGETS_A) == 6 and len(TARGETS_B) == 44 and len(TARGETS_C) == 12
+    assert len(TARGETS_A) == 6 and len(TARGETS_B) == 44 and len(TARGETS_C) == 14
     assert ok_a, "machine A: median %.3f bias %+.3f outliers %.2f" % (
         ia["median"], ia["bias"], ia["outlier_fraction"])
     assert ok_b, "machine B: median %.3f bias %+.3f outliers %.2f" % (
         ib["median"], ib["bias"], ib["outlier_fraction"])
     assert ok_c, "machine A world 16 (blind): median %.3f bias %+.3f outliers %.2f" % (
         ic["median"], ic["bias"], ic["outlier_fraction"])
-    assert ic["median"] > max(ia["median"], ib["median"]), (
-        "corpus C used to be the tightest fit of the three; if that changed, check "
-        "that it was not quietly refitted")
-    assert GATE_MEDIAN - ic["median"] < 0.02, (
-        "corpus C now clears the median gate by more than 2 points; the docs call it "
-        "the thinnest margin and would need updating")
+    assert all(runs >= 6 for _, _, _, runs in TARGETS_C), (
+        "corpus C points must stay medians over repeats, not single readings")
 
 
-def test_x_half_admissible_interval_is_what_the_gates_say():
-    """Sweeping x_half must reproduce the documented admissible interval.
+def test_world8_drift_probe_fails_and_the_cause_is_one_constant():
+    """Corpus D must keep failing, and keep failing for the reason recorded.
 
-    x_half is the one constant borrowed from another machine, so what the gates
-    tolerate matters more here than anywhere else. Every gate is rerun at the
-    endpoints and just outside them. Two claims are pinned: the interval is what
-    calibrate.py says it is, and the shipped point estimate sits inside it without
-    sitting at its centre -- the moment someone recentres it, this fails, because
-    that would be fitting the constant to the gates it is supposed to answer to.
+    It is the only corpus here that misses its gate, and it is kept because the miss
+    is informative: the model runs fast where alpha dominates and slow where the wire
+    term does, which localises the whole bias to alpha(8). Three things are pinned.
+
+      1. It still fails. If it starts passing, either the machine drifted back or
+         someone changed a constant, and a human should find out which.
+      2. Setting alpha(8) to the independently measured 0.128 clears it. That is the
+         diagnosis, and it stops being a diagnosis the moment it stops being true.
+      3. Nothing depends on the choice. Both values give the same breakeven to
+         within a few percent, which is why the constant is left alone rather than
+         retuned to make this corpus green.
     """
-    from sim.calibrate import (X_HALF_ADMISSIBLE, X_HALF_FLAT, flat_supernode,
-                               second_machine)
+    import sim.calibrate as cal
+    from sim.calibrate import flat_supernode
+    from sim.core import Level
+    from sim.validate_sweep import TARGETS_D, validate_sweep
+
+    ok_d, i_d = validate_sweep(flat_supernode(), TARGETS_D, verbose=False)
+    assert not ok_d, (
+        "the world-8 drift probe passes now (median %.3f bias %+.3f); check whether "
+        "alpha(8) was changed or the machine came back" % (i_d["median"], i_d["bias"]))
+    assert i_d["bias"] < -0.05, "the recorded failure is a fast bias; this is not it"
+
+    patched = [(w, 0.128 if w == 8 else v) for w, v in cal.ALPHA_PTS]
+    spec = flat_supernode()
+    spec.flat = Level(spec.flat.name, patched, spec.flat.beta_pts)
+    ok_fixed, i_fixed = validate_sweep(spec, TARGETS_D, verbose=False)
+    assert ok_fixed, (
+        "alpha(8)=0.128 no longer clears the drift probe (median %.3f bias %+.3f); "
+        "the diagnosis in validate_sweep.py is stale"
+        % (i_fixed["median"], i_fixed["bias"]))
+
+
+def test_the_gates_bound_x_half_from_above_only():
+    """Sweeping x_half must reproduce the documented one-sided bound.
+
+    x_half is the one borrowed constant, so what the gates actually tolerate is
+    worth pinning. They tolerate a lot: machine B rules out anything above
+    X_HALF_GATE_UPPER, and nothing rules out the low end at all.
+
+    The weak lower end is the honest part and is asserted directly, because an
+    earlier revision claimed a two-sided interval that came from a single-run
+    corpus. Repeating that corpus dissolved the lower bound. If someone reintroduces
+    a lower bound, this fails and they have to show it came from measurement rather
+    than from noise.
+    """
+    from sim.calibrate import X_HALF_FLAT, X_HALF_GATE_UPPER, flat_supernode, second_machine
     from sim.validate_micro import validate_micro
     from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, validate_sweep
 
@@ -302,19 +335,14 @@ def test_x_half_admissible_interval_is_what_the_gates_say():
                 and validate_sweep(second_machine(x_half), TARGETS_B, verbose=False)[0]
                 and validate_sweep(c, TARGETS_C, verbose=False)[0])
 
-    lo, hi = X_HALF_ADMISSIBLE
-    assert all_gates(lo), "the documented lower endpoint no longer passes"
-    assert all_gates(hi), "the documented upper endpoint no longer passes"
     assert all_gates(X_HALF_FLAT), "the shipped x_half must pass every gate"
-    assert not all_gates(lo - 2 * 1024), "the interval is wider below than documented"
-    assert not all_gates(hi + 2 * 1024), "the interval is wider above than documented"
-
-    assert lo < X_HALF_FLAT < hi
-    centre = (lo + hi) / 2.0
-    assert abs(X_HALF_FLAT - centre) > 0.1 * (hi - lo), (
-        "x_half has drifted to the centre of the gate-admissible interval, which is "
-        "what fitting to the gates looks like; it is meant to stay where the "
-        "measurement put it")
+    assert all_gates(X_HALF_GATE_UPPER), "the documented upper bound no longer passes"
+    assert not all_gates(X_HALF_GATE_UPPER + 1024), (
+        "the gates now tolerate more than the documented upper bound")
+    assert all_gates(1024), (
+        "a lower bound has appeared; the docs say the gates have none, so either "
+        "update them or check that the new corpus is not just noisy")
+    assert X_HALF_FLAT < X_HALF_GATE_UPPER
 
 
 # ---------------------------------------------------------------- compute model

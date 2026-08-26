@@ -85,19 +85,24 @@ BETA_FLAT = 117.8    # 128-card full-fabric a2a: asymptotic bandwidth, fitted on
 #   meaningful with alpha pinned to its direct measurements, which is how it was fitted.
 X_HALF_FLAT = 54 * 1024
 X_HALF_CI = (30 * 1024, 87 * 1024)
-# A second, tighter interval, and a different quantity. X_HALF_CI is the bootstrap
-# spread of a fit to one corpus. X_HALF_ADMISSIBLE is the range over which *every*
-# validation gate still passes -- Tier-1 plus all three Tier-1b corpora -- found by
-# sweeping x_half and rerunning them (tests/test_sim.py pins the endpoints).
+# How much room the *gates* leave x_half, which is a different quantity from the
+# bootstrap interval above: sweep x_half, rerun Tier-1 and all three Tier-1b corpora,
+# and see where every one of them still passes.
 #
-# It is half as wide as the bootstrap interval and it is narrowed from both sides by
-# corpora that were never fitted: the machine A world-16 sweep of 2026-08-26 rules
-# out everything below 46 KiB, and machine B rules out everything above 76 KiB.
-# The shipped 54 was picked before that corpus existed and before this sweep was run;
-# it sits inside, off-centre, and is deliberately left where it is. Moving it to the
-# middle of an interval derived from the gates would be fitting to the gates, which
-# is exactly what the three-tier discipline exists to prevent.
-X_HALF_ADMISSIBLE = (46 * 1024, 76 * 1024)
+# The answer is one-sided. Machine B rules out anything above 77 KiB, tightening the
+# bootstrap upper end slightly. Nothing rules out the low end -- 1 KiB passes every
+# gate, because at a small x_half beta_eff is simply beta_inf across the payload
+# range the corpora cover, and no corpus has the small-message resolution to object.
+# So the gates corroborate the upper half of the bootstrap interval and say nothing
+# about the lower half. x_half stays a weakly determined, borrowed constant, and
+# sim/fit.py's identifiability caveat is the reason.
+#
+# Recorded because an earlier revision of this file claimed [46, 76] KiB, deriving a
+# lower bound from a single-run version of the world-16 corpus. Repeating that sweep
+# six times and taking medians dissolved the bound. **An admissibility interval
+# computed from a noisy corpus comes out too tight**, and too tight is the flattering
+# direction, so it reads as a stronger result than the data supports.
+X_HALF_GATE_UPPER = 77 * 1024
 BETA_FAST = 122.4    # intra-node 8-card a2a: **physics-endorsed** --
                      #   measured 88.08 MB / 0.719 ms = 122.6,
                      #   physical aggregate egress (6x intra-node links 112.1 + 1x in-package direct 185)/7 = 122.4
