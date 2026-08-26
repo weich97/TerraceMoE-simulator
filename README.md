@@ -134,8 +134,8 @@ Three results, all of them load-bearing elsewhere in this repository.
 - **Collectives do not pipeline.** Per-call cost stops falling at N around 16 and
   stays flat to N = 1024. Two back-to-back calls cost twice one, which is the
   assumption `sim/core.py` makes when it prices the two-hop chain serially.
-- **The shipped `alpha` is corroborated at the level**: 128 microseconds measured
-  against a tabulated 111 at world 8, 143 against 157 at world 16, both inside the
+- **The shipped `alpha` is corroborated at the level**: 129 microseconds measured
+  against a tabulated 111 at world 8, 134 against 157 at world 16, both inside the
   20% run-to-run drift the calibration documents, from a different benchmark months
   later. The 41% step between the two table entries is *not* confirmed; the scan
   sees 12%, inside its own spread.

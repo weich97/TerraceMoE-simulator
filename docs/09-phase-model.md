@@ -120,10 +120,10 @@ below is the median over repetitions of the slowest rank.
 
 | | world 8 | world 16 |
 |---|---|---|
-| deep queue, host runs ahead | 128  (117, 124, 133 over three runs) | 143 |
-| host observes each call | 256  (245, 267 over two nodes) | 282 |
-| gap | 128 | 139 |
-| of which host CPU spent enqueuing | 56  (44, 68) | 74 |
+| deep queue, host runs ahead | 129  (124 and 134 over two nodes) | 134 |
+| host observes each call | 255  (247 and 263) | 283 |
+| gap | 126 | 149 |
+| of which host CPU spent enqueuing | 58 | 76 |
 
 Four things fall out.
 
@@ -137,12 +137,30 @@ because it is the assumption the whole two-hop comparison rests on.
 per-call number to within the run-to-run spread, as they have to: the wire term at
 16 KiB is 0.12 microseconds.
 
-**It is roughly world-independent over the range measured.** 128 against 143 for a
-doubling of world, a 12% step, inside the 15% spread across payloads in the same
-session and comparable to the 13% spread between the two nodes themselves. The
-shipped `alpha` steps 41% over the same range. Both alpha entries are individually
-confirmed within the 20% drift the calibration documents, so nothing moves, but the
-step itself is not resolved by this scan and should not be quoted as confirmed.
+**Its shape across worlds is not the tabulated shape.** The scan was repeated at
+worlds 2 and 4 so the instrument could be checked where nothing is in dispute:
+
+| world | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|
+| measured, microseconds | 87 | 98 | 129 | 134 |
+| tabulated `alpha` | 90 | 97 | 111 | 157 |
+
+It reproduces worlds 2 and 4 to within 3% and then departs at 8 and 16, in opposite
+directions. The measured curve climbs while a node fills, 87 to 129 across worlds 2
+to 8, and then barely moves crossing to a second node, 129 to 134. That is what a
+bandwidth-flat supernode ought to do, and it is corroborated independently: the
+largest-payload asymptote today is 103 GB/s at world 8 and 100.7 at world 16, a
+ratio of 0.978 against the 0.974 the calibration ships for exactly that flatness.
+The tabulated 111 to 157 says something different.
+
+**Nothing is changed on the strength of it**, and the reason is worth stating.
+Setting `alpha(8)` to the measured 129 makes every validation corpus pass, including
+the world-8 one that currently fails. Setting `alpha(16)` to the measured 134 — the
+same scan, the same day, the same convention — breaks the world-16 corpus, from 8.0%
+to 15.5%. Taking the half of a measurement that greens a gate while discarding the
+half that reddens another is choosing by outcome, so neither half is taken. What
+this leaves is an honest disagreement between two benchmarks of the same machine,
+recorded in `sim/validate_sweep.py` as a corpus that ships red.
 
 **Half the per-call cost is the host, and it is hidden only while the queue is
 deep.** Submission costs 44 to 74 microseconds of host CPU. When the host runs

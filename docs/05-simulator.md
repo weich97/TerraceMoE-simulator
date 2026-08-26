@@ -223,7 +223,7 @@ nothing from it is shipped. **x_half remains a borrowed shape.**
 **And one gate now fails.** Those same world-8 medians, scored as a fourth Tier-1b
 corpus, miss at 15.1% median with a −9.1% bias. The miss is localised: below 8 MB,
 where α is 76–97% of the prediction, the model runs 18% fast; above it the wire term
-dominates and it runs 10% slow. That is one number, α(8) = 0.111, against 0.128
+dominates and it runs 10% slow. That is one number, α(8) = 0.111, against 0.129
 measured the same day by the independent call-count scan. Setting α(8) to the
 measured value clears the corpus (9.3%, −0.8%) and keeps Tier-1 green at 4.9%
 against its 20% gate. **The constant is not changed**: both readings are direct
@@ -272,8 +272,8 @@ Skew belongs to end-to-end prediction, which is Tier-2 territory and locked.
 
 **Read as a per-call cost, not a payload cost: the launch path.** A call-count scan
 ([docs/09](09-phase-model.md), figure F16) measured one collective in two regimes
-and found the fixed cost is 128 microseconds when the host runs ahead of the device
-and 256 when it has to observe each call. The gap holds its share, 46 to 59% of the
+and found the fixed cost is 129 microseconds when the host runs ahead of the device
+and 255 when it has to observe each call. The gap holds its share, 46 to 59% of the
 total, across every payload from 64 KiB to 16 MB, so it is charged per call and
 never as a fraction of the traffic. Two consequences for the numbers on this page:
 the tabulated `alpha` is corroborated at the level by an independent benchmark and

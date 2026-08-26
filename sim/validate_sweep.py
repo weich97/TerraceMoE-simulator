@@ -141,18 +141,25 @@ TARGETS_C = [
 # below 8 MB, where alpha is 76-97% of the prediction, the model runs 18% fast;
 # above it, where the wire term dominates, it runs 10% slow. That localises the
 # whole failure to one number, alpha(8) = 0.111, and an independent call-count scan
-# on the same day put the world-8 fixed cost at 0.128 (sim/profile.py). Set alpha(8)
+# on the same day put the world-8 fixed cost at 0.129 (sim/profile.py). Set alpha(8)
 # to that measured value and this corpus passes at 9.3% with a -0.8% bias, Tier-1
 # stays green at 4.9% against its 20% gate, and the other three corpora do not move.
 #
-# **The constant is not changed.** Both readings are direct measurements of the same
-# machine taken months apart, they differ by 15%, and this file documents 20%
-# run-to-run drift, so neither supersedes the other. What settles it is that nothing
-# depends on the choice: the breakeven ratio moves from 3.87 to 3.89 on the measured
-# chain and 1.45 to 1.47 fused, under 2.1% either way. Retuning alpha(8) to make a
-# newly added corpus pass, at the cost of the one gate that was passed blind, is the
-# failure mode the tiering exists to prevent. So the corpus ships red, the cause
-# ships with it, and tests/test_sim.py pins both.
+# **The constant is not changed**, for three reasons in ascending order of weight.
+#
+# Both readings are direct measurements of the same machine, 15% apart, inside the
+# 20% run-to-run drift this file documents, so neither supersedes the other. Nothing
+# depends on the choice either way: the breakeven ratio moves from 3.87 to 3.89 on
+# the measured chain and 1.45 to 1.47 fused, under 2.1%.
+#
+# And decisively: the measurement cannot be adopted whole. The same scan, extended
+# to worlds 2 and 4, reproduces the table there to within 3% -- so the instrument is
+# sound -- and then reads 129 at world 8 against 111, and 134 at world 16 against
+# 157. Opposite directions. Taking the world-8 half greens this corpus; taking the
+# world-16 half turns corpus C from 8.0% to 15.5%. Adopting only the half that helps
+# is choosing by outcome, which is the failure mode the tiering exists to prevent.
+# So the corpus ships red, the cause ships with it, and tests/test_sim.py pins both
+# halves -- that 0.129 would clear this corpus, and that 0.134 would break the other.
 #
 # Corpus D is therefore reported but held out of the Tier-1b conjunction: it is a
 # drift probe on one constant, not a verdict on the model form, and letting it turn
@@ -226,8 +233,8 @@ def main() -> None:
                              "machine A, world 8 -- DRIFT PROBE, held out of the "
                              "conjunction above")
     if not ok_d:
-        print("  expected: the miss is alpha(8), 0.111 tabulated against 0.128 measured")
-        print("  the same day; adopting 0.128 clears it and moves the breakeven by")
+        print("  expected: the miss is alpha(8), 0.111 tabulated against 0.129 measured")
+        print("  the same day; adopting 0.129 clears it and moves the breakeven by")
         print("  under 2.1%, so the constant is left alone. See the comment on")
         print("  TARGETS_D and tests/test_sim.py.")
 

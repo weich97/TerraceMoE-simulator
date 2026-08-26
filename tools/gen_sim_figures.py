@@ -429,32 +429,35 @@ ax.set_xlabel("Calls issued back to back before the host waits (N)")
 ax.set_ylabel("Cost per call (microseconds)")
 ax.set_ylim(0, 450)
 ax.set_title("One collective call costs what it costs, twice over\n"
-             "the same call is 128 us when the host runs ahead and 256 us when it does not",
+             "the same call is 129 us when the host runs ahead and 255 us when it does not",
              fontsize=10.5)
 ax.legend(frameon=False, fontsize=8, loc="upper right", ncol=1)
 _style(ax)
 
 ax = axes[1]
-worlds = [8, 16]
+worlds = [2, 4, 8, 16]
 xs = range(len(worlds))
 alpha_us = [flat_supernode().flat.alpha_ms(w) * 1e3 for w in worlds]
 deep_us = [PER_CALL_DEEP_QUEUE_MS[w] * 1e3 for w in worlds]
-host_us = [PER_CALL_HOST_EXPOSED_MS[w] * 1e3 for w in worlds]
+host_us = [PER_CALL_HOST_EXPOSED_MS.get(w, 0) * 1e3 for w in worlds]
 w = 0.26
 ax.bar([x - w for x in xs], alpha_us, w, color="#8A8F98", edgecolor="white",
        label="alpha(world) as shipped")
 ax.bar(list(xs), deep_us, w, color="#3A7D5C", edgecolor="white",
        label="measured, queue deep")
-ax.bar([x + w for x in xs], host_us, w, color="#B35A5A", edgecolor="white",
-       label="measured, host exposed")
+ax.bar([x + w for x in xs if host_us[x]], [h for h in host_us if h], w,
+       color="#B35A5A", edgecolor="white", label="measured, host exposed")
 for x, (a, d, h) in zip(xs, zip(alpha_us, deep_us, host_us)):
     for dx, v in ((-w, a), (0, d), (w, h)):
-        ax.text(x + dx, v + 5, "%.0f" % v, ha="center", fontsize=8.2)
-ax.set_xticks(list(xs), ["world 8", "world 16"], fontsize=9)
+        if v:
+            ax.text(x + dx, v + 6, "%.0f" % v, ha="center", fontsize=7.8)
+ax.text(0.5, 128, "agrees within 3% where\nnothing is disputed", ha="center",
+        va="bottom", fontsize=8, color="#5A6068")
+ax.set_xticks(list(xs), ["world %d" % w for w in worlds], fontsize=8.5)
 ax.set_ylabel("Fixed cost per call (microseconds)")
 ax.set_ylim(0, 330)
-ax.set_title("The shipped alpha is corroborated at the level\n"
-             "and belongs to the left-hand regime", fontsize=10.5)
+ax.set_title("Measured alpha climbs while a node fills,\n"
+             "then flattens across nodes; the table does not", fontsize=10.5)
 ax.legend(frameon=False, fontsize=8.2, loc="upper left")
 _style(ax)
 

@@ -182,25 +182,41 @@ LAUNCH_HOST_P2P_MS = (0.257, 0.268)
 # at 16 KiB is 0.12 us.
 # World 8 is the mean of two independent single-node scans (133 and 124 us) and a
 # third that pushed N to 1024 on one of them and landed at 117, so the whole set
-# spans 117-133 for a nominal 128. World 16 spans both nodes and has one scan.
-PER_CALL_DEEP_QUEUE_MS = {8: 0.128, 16: 0.143}      # a2a, plateau at N >= 64
+# spans 117-133 for a nominal 128. Worlds 2 and 4 are two nodes each. World 16 spans
+# both nodes and has one scan; a later rerun at three payloads put it at 134.
+#
+# The worlds 2 and 4 entries are the instrument's own calibration, and they are the
+# reason the world-8 disagreement is worth taking seriously: against a table of
+# 90 / 97 / 111 / 157 the scan reads 87 / 98 / 129 / 134, so it reproduces the two
+# worlds where nothing is in dispute to within 3% and then departs at 8 and 16.
+#
+# It departs in *opposite directions*, and that is what keeps the table where it is.
+# Setting alpha(8) to the measured 129 makes every validation corpus pass, including
+# the world-8 one that currently fails. Setting alpha(16) to the measured 134 --
+# the same scan, the same day, the same convention -- breaks the world-16 corpus,
+# from 8.0% to 15.5%. Adopting the half of a measurement that greens a gate and
+# discarding the half that reddens another is choosing by outcome, so neither is
+# adopted. What the scan does establish is the *shape*: alpha climbs while a node
+# fills, 87 to 129 from world 2 to 8, and then barely moves crossing to a second
+# node, 129 to 134, which is what a bandwidth-flat supernode should do and is not
+# what the tabulated 111 to 157 says.
+PER_CALL_DEEP_QUEUE_MS = {2: 0.087, 4: 0.098, 8: 0.129, 16: 0.134}  # a2a, plateau N>=64
 PER_CALL_DEEP_QUEUE_RANGE_MS = {8: (0.117, 0.133)}  # three runs, two nodes
-PER_CALL_HOST_EXPOSED_MS = {8: 0.256, 16: 0.282}    # a2a, host waits per call (w8: 245 and 267)
+PER_CALL_HOST_EXPOSED_MS = {8: 0.255, 16: 0.283}    # a2a, host waits per call (w8: 247 and 263)
 PER_CALL_SPREAD = 0.15                              # across payloads, same session
-HOST_SUBMIT_MS = {8: 0.056, 16: 0.074}              # host CPU time to enqueue one call (w8: 44 and 68)
+HOST_SUBMIT_MS = {2: 0.039, 4: 0.043, 8: 0.058, 16: 0.076}   # host CPU per enqueue
 
 # The gap between the two regimes is what a device-initiated stack removes. It is
-# world-independent to within the spread, 128 us at world 8 and 139 at world 16,
+# world-independent to within the spread, 126 us at world 8 and 149 at world 16,
 # of which roughly half is submission and the rest is completion detection.
 HOST_EXPOSURE_MS = 0.130
 
 # What this does and does not settle for the shipped alpha table. Read against
-# ALPHA_PTS, the deep-queue floor confirms both entries it can reach -- 128 us
-# measured against alpha(8) = 111, and 143 against alpha(16) = 157 -- each inside
-# the 20% run-to-run drift the calibration documents, from a different benchmark
-# months later. It does not confirm the *step* between them: alpha rises 41% from
-# world 8 to 16 where the direct measurement rises 12%, and 12% sits inside the 15%
-# payload spread, so this scan cannot resolve the step either way. Nothing here
+# ALPHA_PTS, the deep-queue floor lands within the documented 20% run-to-run drift
+# of both entries it can reach -- 129 us measured against alpha(8) = 111, and 134
+# against alpha(16) = 157 -- from a different benchmark months later. It does not
+# confirm the *step* between them: alpha rises 41% from world 8 to 16 where the
+# direct measurement rises 4%. Nothing here
 # changes the table; the two conclusions are that alpha is corroborated at the
 # level and that it belongs to the deep-queue regime.
 LAUNCH_UPPER_BOUND_MS = 0.111    # retained: pre-measurement bound, still the value

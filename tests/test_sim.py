@@ -284,7 +284,7 @@ def test_world8_drift_probe_fails_and_the_cause_is_one_constant():
 
       1. It still fails. If it starts passing, either the machine drifted back or
          someone changed a constant, and a human should find out which.
-      2. Setting alpha(8) to the independently measured 0.128 clears it. That is the
+      2. Setting alpha(8) to the independently measured 0.129 clears it. That is the
          diagnosis, and it stops being a diagnosis the moment it stops being true.
       3. Nothing depends on the choice. Both values give the same breakeven to
          within a few percent, which is why the constant is left alone rather than
@@ -301,14 +301,29 @@ def test_world8_drift_probe_fails_and_the_cause_is_one_constant():
         "alpha(8) was changed or the machine came back" % (i_d["median"], i_d["bias"]))
     assert i_d["bias"] < -0.05, "the recorded failure is a fast bias; this is not it"
 
-    patched = [(w, 0.128 if w == 8 else v) for w, v in cal.ALPHA_PTS]
-    spec = flat_supernode()
-    spec.flat = Level(spec.flat.name, patched, spec.flat.beta_pts)
-    ok_fixed, i_fixed = validate_sweep(spec, TARGETS_D, verbose=False)
+    def with_alpha(overrides):
+        pts = [(w, overrides.get(w, v)) for w, v in cal.ALPHA_PTS]
+        spec = flat_supernode()
+        spec.flat = Level(spec.flat.name, pts, spec.flat.beta_pts)
+        return spec
+
+    ok_fixed, i_fixed = validate_sweep(with_alpha({8: 0.129}), TARGETS_D, verbose=False)
     assert ok_fixed, (
-        "alpha(8)=0.128 no longer clears the drift probe (median %.3f bias %+.3f); "
+        "alpha(8)=0.129 no longer clears the drift probe (median %.3f bias %+.3f); "
         "the diagnosis in validate_sweep.py is stale"
         % (i_fixed["median"], i_fixed["bias"]))
+
+    # The half that is not adopted, and why. The same scan measured alpha(16) at
+    # 0.134; taking it breaks corpus C. Pinning that keeps the record honest -- the
+    # reason for leaving the table alone is that the measurement cannot be adopted
+    # whole, not that its world-8 half is doubted.
+    from sim.validate_sweep import TARGETS_C
+    ok_c16, i_c16 = validate_sweep(with_alpha({16: 0.134}), TARGETS_C, verbose=False)
+    assert not ok_c16, (
+        "adopting the measured alpha(16)=0.134 now leaves corpus C passing (median "
+        "%.3f bias %+.3f); if the measurement can be adopted whole, the argument in "
+        "validate_sweep.py and docs/09 for leaving alpha alone no longer holds"
+        % (i_c16["median"], i_c16["bias"]))
 
 
 def test_the_gates_bound_x_half_from_above_only():
@@ -576,7 +591,13 @@ def test_measured_launch_brackets_the_shipped_alpha():
 
     alpha = dict(ALPHA_PTS)
     c = flat_supernode()
-    for world, deep in PER_CALL_DEEP_QUEUE_MS.items():
+    # Worlds 2 and 4 were scanned in the deep-queue regime only, to check the
+    # instrument against the two tabulated points nobody disputes; the bracket claim
+    # is about the worlds where both regimes were run.
+    both = sorted(set(PER_CALL_DEEP_QUEUE_MS) & set(PER_CALL_HOST_EXPOSED_MS))
+    assert both == [8, 16]
+    for world in both:
+        deep = PER_CALL_DEEP_QUEUE_MS[world]
         exposed = PER_CALL_HOST_EXPOSED_MS[world]
         assert deep < exposed, "world %d: the two regimes collapsed" % world
         a = c.flat.alpha_ms(world)
@@ -589,8 +610,7 @@ def test_measured_launch_brackets_the_shipped_alpha():
             "world %d: alpha %.3f vs measured %.3f is %.0f%% apart, beyond the "
             "20%% drift the calibration claims" % (world, a, deep, 100 * drift))
 
-    gaps = [PER_CALL_HOST_EXPOSED_MS[w] - PER_CALL_DEEP_QUEUE_MS[w]
-            for w in PER_CALL_DEEP_QUEUE_MS]
+    gaps = [PER_CALL_HOST_EXPOSED_MS[w] - PER_CALL_DEEP_QUEUE_MS[w] for w in both]
     assert min(gaps) <= HOST_EXPOSURE_MS <= max(gaps), (
         "HOST_EXPOSURE_MS %.3f is not inside the measured gaps %s"
         % (HOST_EXPOSURE_MS, ["%.3f" % g for g in gaps]))
