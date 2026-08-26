@@ -14,3 +14,6 @@ paper/*.fls
 paper/*.fdb_latexmk
 paper/*.synctex.gz
 paper/main.pdf
+
+# Paper source is kept locally and managed in Overleaf, not in this repository.
+paper/
