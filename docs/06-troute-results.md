@@ -1,5 +1,8 @@
 # T-Route ablation results: the complete set
 
+For what the constraint is and how the four routing modes differ, start at
+[docs/10](10-troute.md). This page is the full record behind it.
+
 **One sentence: T-Route (group-limited + equal-quota within groups) is lossless/neutral on all four axes — quality, downstream, load, step time — and every axis carries a preregistered criterion + paired seeds + a holdout set/independent measurement.** The numbers embedded in the figures match those embedded in `tools/gen_figures.py` — the script is the source, and the figures are reproducible.
 
 Testbed: 13.14B total params / 1.33B active, E=128 = 8 groups × 16, k=8, M=4; 4 routing modes × 4 seeds = 16 arms, 62.9B tokens per arm; all four modes switch via `mode` inside **the same function** (a single shared code path is the precondition for a comparable ablation; implementation in `terrace/routing.py`).

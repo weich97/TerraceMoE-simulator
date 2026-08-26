@@ -31,7 +31,7 @@ Many training stacks wrap the MoE layer forward in a custom `autograd.Function` 
 - the metadata path (int, no gradient) goes through raw a2a;
 - gates hang on their own differentiable edge — **do not weld gates and payload into one fused node**: the outer stack may call `.backward()` separately on the two outputs; welding them triggers "backward a second time", and the first call writes zero gradients into the other path (we hit this).
 
-An integrator needs to provide only two things: the dispatch seam (replace the original token_permutation with T-A2A's permute) and the combine seam (mirror image). **Integration shims do not ship with the library** — they couple tightly to the specific training stack; this repo's tests guard bit-level correctness against a pure-PyTorch reference chain (289 tests repo-wide, runnable on CPU).
+An integrator needs to provide only two things: the dispatch seam (replace the original token_permutation with T-A2A's permute) and the combine seam (mirror image). **Integration shims do not ship with the library** — they couple tightly to the specific training stack; this repo's tests guard bit-level correctness against a pure-PyTorch reference chain (291 tests repo-wide, runnable on CPU).
 
 ## Known structural costs (honest list)
 

@@ -194,6 +194,46 @@ preregistered window, so an x_half much above the fitted interval would fail the
 gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
 further drift shows up immediately.
 
+## Payload: what the model varies, and what it deliberately does not
+
+The cost of a call is driven by payload, so it is worth being explicit about which
+payload dimensions the model reads and which it ignores.
+
+**Read by the model.** Total send bytes per rank, per-peer bytes through the
+saturating bandwidth term, hidden width, top-k, group count M, tokens per rank, and
+element width. Element width is a parameter (`bytes_per_elem`, bf16 by default);
+halving it for fp8 both halves the traffic and pushes the per-peer size toward the
+unsaturated regime, and the model handles both effects, though no measurement in
+this repository exercises a width other than bf16.
+
+**Modelled separately, on purpose: routing skew** (`sim/imbalance.py`). A
+variable-length all-to-all finishes when its busiest peer finishes, not its average
+one. With the measured expert-load coefficient of variation of 0.136, the busiest
+peer carries this much more than the mean:
+
+| Collective | Peers | Inflation |
+|---|---|---|
+| one-hop | 128 | 1.42 |
+| Hop B | 8 | 1.28 |
+| Hop A | 16, aggregating q=3 experts per message | 1.19 |
+
+**Skew favours two-hop**, and by a first-order amount: it shifts the ratio by +0.09
+at hierarchy ratio 1.03 and by +0.40 at ratio 8. The mechanism is that the maximum
+is taken over fewer peers on the two-hop side, and Hop A additionally aggregates q
+expert loads into one message before the maximum is taken. This is the only modelled
+effect that points the opposite way from the arrival chain.
+
+It is kept out of `core.py` on purpose, and a test enforces that. The Tier-1 targets
+come from a microbenchmark that divides its buffer equally across peers, so it is
+balanced by construction; applying an inflation factor there would model an effect
+the measurement does not contain, and the gate would reject it for the right reason.
+Skew belongs to end-to-end prediction, which is Tier-2 territory and locked.
+
+**Not modelled.** Metadata bytes: gate and slot values are packed alongside the
+payload in the reference implementation, and the model counts only payload rows.
+Capacity factors and token dropping are absent entirely. Both would need
+measurements we do not have.
+
 ## The other half of the step: expert compute (`sim/compute.py`)
 
 Communication is only one side of an MoE step. A measured bf16 GEMM roofline (256
@@ -253,6 +293,7 @@ written up as a protocol anyone with a cluster can run as-is.
 python -m sim.validate_micro     # Tier-1 gate
 python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines)
 python -m sim.compute            # expert-FFN roofline and the bracket it implies
+python -m sim.imbalance         # routing skew: how much it favours two-hop
 python -m sim.platforms          # calibrated platforms + where the methods pay off
 python -m sim.profile            # is a given machine worth it, and which condition decides
 python -m sim.phase              # phase spans; refuses step time until calibrated (docs/09)

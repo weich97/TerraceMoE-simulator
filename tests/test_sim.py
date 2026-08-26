@@ -398,3 +398,48 @@ def test_checklist_names_the_reason_not_just_the_verdict():
     q_cond = next(c for c in conds if "q = k/M" in c.name)
     dom = next(c for c in conds if "fast domain" in c.name)
     assert not q_cond.passed and not dom.passed
+
+
+# ---------------------------------------------------------------- routing skew
+
+
+def test_skew_favours_two_hop_and_is_kept_out_of_the_calibration():
+    """Load skew inflates the busiest peer, and it inflates one-hop most.
+
+    The maximum is taken over EP peers for one-hop against N_g and R for the two
+    hops, and Hop A additionally aggregates q experts per message, so the same
+    measured expert-load CV costs one-hop more. This is the only modelled effect
+    pointing the opposite way from the arrival chain, and it must never leak into
+    core.py: the Tier-1 microbenchmark divides its buffer equally, so applying an
+    inflation there would model something the calibration does not contain.
+    """
+    from sim.calibrate import synthetic
+    from sim.core import MoEGeometry
+    from sim.imbalance import (CV_EXPERT_MEDIAN, adjusted_ratio,
+                               strategy_inflation)
+    from sim.sweep import CHAIN_SCENARIOS
+
+    g = MoEGeometry(name="skew", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    f = strategy_inflation(g.ep, g.n_groups, g.R, g.q)
+    assert f["one_hop"] > f["hop_b"] > f["hop_a"] > 1.0, (
+        "inflation must fall with fewer peers, and Hop A must gain again from "
+        "aggregating q experts: got %s" % f)
+    for ratio in (1.03, 3.2, 8.0):
+        out = adjusted_ratio(synthetic(ratio, chain_us_per_row=CHAIN_SCENARIOS[1][1]), g)
+        assert out["shift"] > 0, "skew must favour two-hop at ratio %.2f" % ratio
+    # zero skew must reduce to the balanced model exactly
+    flat = adjusted_ratio(synthetic(3.2, chain_us_per_row=CHAIN_SCENARIOS[1][1]), g,
+                          cv_expert=0.0)
+    assert abs(flat["shift"]) < 1e-12
+    assert 0.10 < CV_EXPERT_MEDIAN < 0.20, "measured expert-load CV moved; recheck docs"
+
+
+def test_core_does_not_apply_skew():
+    """core.py must stay balanced, because Tier-1's targets are balanced."""
+    import inspect
+    from sim import core
+    src = inspect.getsource(core)
+    assert "imbalance" not in src, (
+        "core.py imported the skew model. Tier-1 targets come from an equal-split "
+        "benchmark; applying skew there would fail the gate for the right reason.")
