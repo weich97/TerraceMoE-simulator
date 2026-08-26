@@ -303,18 +303,39 @@ other side — and, more usefully, say precisely where the data stops.
 
 The curve is **not monotone** — it peaks at 4096 and dips through 8192–12288. That
 is measured and reproduced, so it is kept rather than smoothed into a tidy fit.
-Its headline for MoE: at 1024 the machine delivers 43% of its own peak, so narrow
-experts do not merely do less work, they do it *less efficiently*, and a FLOP count
-alone cannot see that.
 
-**Compute time comes out as a bracket, and the bracket is the result.** The
-roofline is square; an expert matmul is (rows × hidden × d_expert) with rows far
-larger than d_expert, and we never measured a non-square GEMM. Three defensible
-ways to index a square curve by a non-square shape — smallest dimension, geometric
-mean, row count — agree to **1.19×** when d_expert = hidden, and diverge to
-**2.25×** once d_expert ≤ hidden/2. So: for wide experts the compute number is
-usable; for the fine-grained MoE regime it is assumption-dominated and must be
-quoted as a range, or someone has to go measure tall-skinny GEMMs.
+**A reading of this curve that we withdrew.** This page used to say that at 1024 the
+machine delivers 43% of its own peak, *therefore* narrow experts do not merely do
+less work but do it less efficiently. Eight expert-FFN shapes were then measured
+directly on two nodes, and they refute it: a GEMM whose smallest dimension is 1536
+runs at **310 to 328 TFLOPS**, not at the 206 the square curve implies for a
+dimension that size. The square-1024 dip is a **total-work** effect, not a shape
+effect — a square 1024 matmul is 2.1 GFLOP and never fills the machine, while an
+expert FFN of 1536 × 2048 × 5504 is 34.6 GFLOP and does. What survives is narrower
+and still worth saying: efficiency falls when the total work *per call* is small,
+which happens at high expert counts and small micro-batches, not merely because
+d_expert is small.
+
+**The bracket is closed.** The three indexing rules were scored against those eight
+measurements:
+
+| Rule | median abs error | bias | worst |
+|---|---|---|---|
+| smallest dimension | 19.0% | −19.0% | 37.1% |
+| row count | 11.2% | −11.2% | 37.1% |
+| **geometric mean** | **6.4%** | −6.4% | **10.9%** |
+
+All three under-predict, because a square curve is the wrong prior for a large
+non-square GEMM, but they are not equally wrong and the data now chooses. `sim/compute.py`
+uses the geometric mean and reports a band from its measured worst case rather than
+from an assumption spread. The residual −6.4% bias is left uncorrected: eight points
+on one machine is not enough to fit a correction onto, and the direction is the safe
+one, since predicting compute slightly slow understates communication's share, which
+is exactly what `comm_share_upper_bound` is meant to bound from above.
+
+Same-session square references came back at 328.7 (4096) and 296.6 (8192) against the
+327.4 and 296.7 in the table, so the curve itself reproduced and the non-square shapes
+can be read against it directly. The two nodes agree to 0.0–3.0% on every shape.
 
 **Compute is never added to communication.** The two overlap by an amount nothing
 on hand resolves — the same gap that keeps Tier-2 locked. `comm_share_upper_bound`
@@ -344,7 +365,7 @@ written up as a protocol anyone with a cluster can run as-is.
 ```
 python -m sim.validate_micro     # Tier-1 gate
 python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines, three corpora)
-python -m sim.compute            # expert-FFN roofline and the bracket it implies
+python -m sim.compute            # expert-FFN roofline, measured non-square shapes
 python -m sim.imbalance         # routing skew: how much it favours two-hop
 python -m sim.platforms          # calibrated platforms + where the methods pay off
 python -m sim.profile            # is a given machine worth it, and which condition decides

@@ -363,6 +363,56 @@ def test_the_gates_bound_x_half_from_above_only():
 # ---------------------------------------------------------------- compute model
 
 
+def test_the_measured_shapes_choose_the_index_rule():
+    """The rule in use must still be the one the non-square measurements picked.
+
+    This module spent a long time refusing to choose between three ways of indexing
+    a square roofline by a non-square shape, on the grounds that the data did not
+    decide. Eight measured expert-FFN shapes decide. The test rescores them rather
+    than trusting the recorded verdict, so the choice cannot rot: if someone edits
+    the roofline table, the winner is recomputed and has to still be the geometric
+    mean, with the error figures the docs quote.
+
+    Also pinned: every rule under-predicts. That is the interesting part -- a square
+    curve is a systematically pessimistic prior for a large non-square GEMM, and if
+    that ever reverses the withdrawn "narrow experts are inefficient" reading would
+    need revisiting.
+    """
+    import statistics as S
+    from sim.compute import (INDEX_RULE, INDEX_RULE_ERROR, NONSQUARE_TFLOPS,
+                             efficiency_bracket)
+
+    errs = {}
+    for shape, meas in NONSQUARE_TFLOPS.items():
+        for rule, pred in efficiency_bracket(*shape)["per_rule"].items():
+            errs.setdefault(rule, []).append((pred - meas) / meas)
+
+    scored = {r: S.median([abs(e) for e in v]) for r, v in errs.items()}
+    best = min(scored, key=scored.get)
+    assert best == INDEX_RULE, (
+        "the measured shapes now favour %r, not the %r this module uses: %s"
+        % (best, INDEX_RULE, {k: round(100 * v, 1) for k, v in scored.items()}))
+
+    assert abs(scored[INDEX_RULE] - INDEX_RULE_ERROR["median_abs"]) < 0.005, (
+        "the recorded median error %.3f no longer matches the recomputed %.3f"
+        % (INDEX_RULE_ERROR["median_abs"], scored[INDEX_RULE]))
+    worst = max(abs(e) for e in errs[INDEX_RULE])
+    assert abs(worst - INDEX_RULE_ERROR["worst"]) < 0.005
+
+    for rule, v in errs.items():
+        assert S.median(v) < 0, (
+            "rule %r no longer under-predicts; the square roofline was a "
+            "pessimistic prior and the docs say so" % rule)
+
+    # The rejected rules must stay clearly worse, or "the data decides" is too
+    # strong a claim to keep making.
+    for rule in scored:
+        if rule != INDEX_RULE:
+            assert scored[rule] > 1.5 * scored[INDEX_RULE], (
+                "rule %r is now within 1.5x of the chosen one; the selection is no "
+                "longer decisive" % rule)
+
+
 def test_compute_roofline_is_non_monotone_and_penalises_small_gemms():
     """The measured curve peaks at 4096 and dips after it; small GEMMs pay heavily.
 
