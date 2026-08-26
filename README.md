@@ -1,10 +1,24 @@
 <img src="docs/assets/logo.svg" alt="TerraceMoE Simulator logo" width="84" align="right">
 
-# TerraceMoE Simulator: MoE communication methods for hierarchical clusters, with measurement-calibrated simulation
+# TerraceMoE Simulator: a measurement-calibrated cost model for MoE communication, and the map of where hierarchical methods pay off
 
-Three things: the methods and reference implementations of **T-Route** (hierarchy-aligned routing constraints) and **T-A2A** (two-hop hierarchical all-to-all); an **applicability criterion** (should your cluster use this at all); and a communication simulator (`sim/`) that is **calibrated on real measurements and validated against independent measurements** — calibrate on one machine, answer questions about clusters of many.
+**What this is: a way to answer "should my cluster do hierarchical MoE communication?" without building it first.** A cost model for MoE all-to-all, calibrated on measured primitives, validated against independent measurement families on two machines, and pointed at the platform classes people actually run on. Plus the two methods it prices — **T-Route** (hierarchy-aligned routing constraints) and **T-A2A** (two-hop hierarchical all-to-all) — with reference implementations.
 
-> **One-sentence positioning: these methods target clusters with pronounced hierarchy** — fabrics where the fast side (intra-node / intra-rack / intra-supernode) has at least 1.5x the bandwidth of the slow side (cross-node / cross-rack), under the q≥3 convention. We built the whole thing on a **bandwidth-flat** supernode and measured it to the bottom: **on a flat fabric, two-hop does not pay** (see [Applicability criterion](#applicability-criterion-run-this-first)). We open-source it because the criterion, the derivation, and the implementation still hold for hierarchical clusters — the same family of methods has been validated as effective on hierarchical fabrics by multiple public works.
+Run `python -m sim.platforms` for the map. Its short form:
+
+| Platform class | fast/slow ratio | worth two-hop? |
+|---|---|---|
+| Unified-fabric supernode | ~1 | no, at any implementation quality |
+| PCIe accelerators + InfiniBand | ~2.4 | only with a fused arrival chain |
+| Intra-server HCCS + cross-server RoCE | ~8 | yes |
+| 8-GPU NVLink node + InfiniBand | ~9 | yes |
+| Rack-scale NVLink/UB domain + cross-rack | ~18 | yes, and check whether EP fits inside the domain instead |
+
+(Ratios are nominal, for orientation. Measure your own — effective ratios differ from nominal often enough to flip a row.)
+
+**T-Route is the result that stands on its own.** The constraint that makes the two-hop shape expressible — each token's cross-group fan-out bounded at compile time, every cross-group message constant-size — was measured to cost nothing: **quality-neutral** (+0.0034 nats, 3.4% of the preregistered threshold, 24/24 paired seed deltas sharing the sign), **downstream-equivalent** under preregistered TOST on two benchmarks, **load-neutral**, and **step-time-neutral** (G = 0.9976). A compile-time traffic envelope for free ([docs/06](docs/06-troute-results.md)).
+
+> **On calibration coverage, stated plainly.** Both machines we have measured sit at hierarchy ratio ≈1 — unified-fabric supernodes, the leftmost row of the table. They are what calibrated the model and what proved it transfers (all constants re-fitted on the second machine, 44 independent targets at 9.3% median, no bias). They are *not* evidence about hierarchical machines: everything to the right of that first row is extrapolation from the model, consistent in direction with public results on hierarchical fabrics (DeepSeek-V3 node-limited routing, TeleChat3-MoE +15% at EP=16, Pangu Ultra MoE) but not measured by us. Calibrating one machine above ratio 1.5 would change that; more machines at ratio 1 would not.
 
 ---
 
@@ -66,11 +80,11 @@ The **complete ablation results, per-seed figures, and retraction records** for 
 | Path | Contents | Status |
 |---|---|---|
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
-| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 285 CPU tests; end-to-end measured only on a flat supernode — see the criterion) |
+| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 287 CPU tests; end-to-end measured only on a flat supernode — see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
 | `sim/` | Measurement-calibrated communication simulator: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b validation gates passed** (2.8% median against the calibration's own benchmark; 1.9%/9.3% against an independent benchmark family on two machines); Tier-2 (end-to-end step level) honestly marked as failing, step-level extrapolation banned — the systematic negative result across six families of overlap models, and the measurement protocol that would break the impasse, are in [docs/07-tier2-overlap.md](docs/07-tier2-overlap.md) |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
-| `tests/` | 285 tests, pure CPU (no NPU needed) | All green |
+| `tests/` | 287 tests, pure CPU (no NPU needed) | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |
 | `docs/` | Design docs ×5 + the full ablation results (docs/06) + the Tier-2 campaign (docs/07) + the one-sided negative verdict (docs/08); figures-first | — |
 | `tools/gen_figures.py` | Result-figure generation (numbers embedded; figures reproducible) | — |

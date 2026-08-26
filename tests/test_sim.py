@@ -308,3 +308,45 @@ def test_comm_share_is_labelled_and_behaves_as_a_bound():
     assert comm_share_upper_bound(1.0, 0.0) == 1.0
     assert abs(comm_share_upper_bound(1.0, 3.0) - 0.25) < 1e-12
     assert comm_share_upper_bound(0.0, 0.0) != comm_share_upper_bound(0.0, 0.0)  # nan
+
+
+# ---------------------------------------------------------------- platform map
+
+
+def test_platform_map_verdicts_follow_the_breakevens():
+    """The where-it-pays table must be derived, never hand-written.
+
+    Every cell is `ratio >= breakeven(tier)`, so the table cannot drift away from
+    the calibration behind it. Also pins the two ends that carry the message: the
+    unified-fabric row is 'no' at every tier, and the high-ratio rows are 'yes' at
+    every tier -- if either flips, the headline table in README is wrong.
+    """
+    from sim.platforms import platform_map
+    rows = platform_map()
+    for r in rows:
+        for tier, ok in r["verdict"].items():
+            assert ok == (r["archetype"].ratio_nominal >= r["breakevens"][tier])
+    by_key = {r["archetype"].key: r for r in rows}
+    assert not any(by_key["flat-supernode"]["verdict"].values())
+    assert all(by_key["nvlink-ib"]["verdict"].values())
+    assert all(by_key["rack-domain"]["verdict"].values())
+    # the middle row is the interesting one: implementation tier decides it
+    mid = by_key["pcie-ib"]["verdict"]
+    assert sum(mid.values()) == 2, "PCIe+IB should pay only above the PyTorch tier"
+
+
+def test_platform_coverage_reports_the_gap_honestly():
+    """Coverage must keep announcing that no calibrated machine is hierarchical.
+
+    The day someone adds a platform above ratio 1.5, this flips and the claim in
+    README about extrapolation has to be rewritten -- deliberately, not silently.
+    """
+    from sim.platforms import PLATFORMS, coverage
+    c = coverage()
+    assert c["n_platforms"] == len(PLATFORMS) >= 2
+    assert not c["spans_hierarchical"], (
+        "a platform above ratio 1.5 is now calibrated -- update README's coverage "
+        "paragraph and docs/05 before relaxing this test")
+    for p in PLATFORMS.values():
+        assert p.provenance and p.notes, "every platform states where it came from"
+        assert p.spec().flat.beta_gbps(8 * 1024 ** 2) > 0
