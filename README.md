@@ -16,6 +16,19 @@ Run `python -m sim.platforms` for the map. Its short form:
 
 (Ratios are nominal, for orientation. Measure your own — effective ratios differ from nominal often enough to flip a row.)
 
+**Is *your* machine one of them?** `python -m sim.profile` runs the checklist the map is built from. A ratio alone does not decide it; six conditions do, and the tool names which one fails:
+
+| Condition | Why it can sink an otherwise good machine |
+|---|---|
+| q = k/M ≥ 2 | at q=1 each token already sends one row per group — nothing to deduplicate |
+| ratio ≥ **effective** breakeven | the byte account needs 1.31 at R=8, q=3; your arrival chain sets the real threshold (3.87 as a PyTorch op chain, 1.45 fused) |
+| EP spans >1 fast domain | if every expert fits inside one NVLink/HCCS domain there is no slow hop to save — keep EP in the domain instead. Rack-scale domains make this common |
+| messages bandwidth-bound | below the half-performance size, byte savings do not convert into time |
+| α(N_g)+α(R) < α(EP) | two hops pay two fixed costs; on a machine where α barely grows with world size that swap loses before any byte moves — **a machine property, must be measured** |
+| arrival chain cost | advisory: already priced above, but it is the one item fully under your control, and fusing it moves the threshold further than most topology changes |
+
+The checklist and the cost model can never disagree — a machine it clears is one the model scores above 1, pinned by a test.
+
 **T-Route is the result that stands on its own.** The constraint that makes the two-hop shape expressible — each token's cross-group fan-out bounded at compile time, every cross-group message constant-size — was measured to cost nothing: **quality-neutral** (+0.0034 nats, 3.4% of the preregistered threshold, 24/24 paired seed deltas sharing the sign), **downstream-equivalent** under preregistered TOST on two benchmarks, **load-neutral**, and **step-time-neutral** (G = 0.9976). A compile-time traffic envelope for free ([docs/06](docs/06-troute-results.md)).
 
 > **On calibration coverage, stated plainly.** Both machines we have measured sit at hierarchy ratio ≈1 — unified-fabric supernodes, the leftmost row of the table. They are what calibrated the model and what proved it transfers (all constants re-fitted on the second machine, 44 independent targets at 9.3% median, no bias). They are *not* evidence about hierarchical machines: everything to the right of that first row is extrapolation from the model, consistent in direction with public results on hierarchical fabrics (DeepSeek-V3 node-limited routing, TeleChat3-MoE +15% at EP=16, Pangu Ultra MoE) but not measured by us. Calibrating one machine above ratio 1.5 would change that; more machines at ratio 1 would not.
@@ -80,13 +93,13 @@ The **complete ablation results, per-seed figures, and retraction records** for 
 | Path | Contents | Status |
 |---|---|---|
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
-| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 287 CPU tests; end-to-end measured only on a flat supernode — see the criterion) |
+| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 289 CPU tests; end-to-end measured only on a flat supernode — see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
-| `sim/` | Measurement-calibrated communication simulator: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b validation gates passed** (2.8% median against the calibration's own benchmark; 1.9%/9.3% against an independent benchmark family on two machines); Tier-2 (end-to-end step level) honestly marked as failing, step-level extrapolation banned — the systematic negative result across six families of overlap models, and the measurement protocol that would break the impasse, are in [docs/07-tier2-overlap.md](docs/07-tier2-overlap.md) |
+| `sim/` | Measurement-calibrated cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the worth-it checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b validation gates passed** (2.8% median against the calibration's own benchmark; 1.9%/9.3% against an independent benchmark family on two machines); Tier-2 (end-to-end step level) honestly marked as failing, step-level extrapolation banned — the systematic negative result across six families of overlap models, and the measurement protocol that would break the impasse, are in [docs/07-tier2-overlap.md](docs/07-tier2-overlap.md) |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
-| `tests/` | 287 tests, pure CPU (no NPU needed) | All green |
+| `tests/` | 289 tests, pure CPU (no NPU needed) | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |
-| `docs/` | Design docs ×5 + the full ablation results (docs/06) + the Tier-2 campaign (docs/07) + the one-sided negative verdict (docs/08); figures-first | — |
+| `docs/` | Design docs ×5 + full ablation results (docs/06) + Tier-2 campaign (docs/07) + one-sided verdict (docs/08) + the phase model and the measurement that would calibrate it (docs/09); figures-first | — |
 | `tools/gen_figures.py` | Result-figure generation (numbers embedded; figures reproducible) | — |
 
 **Not in this repository**: training-framework integration (upstream training stack / Megatron shims), cluster and measurement scripts, raw experiment data, internal records. The seam contract is in [docs/02-ta2a-design.md](docs/02-ta2a-design.md); integrators write their own shims against the contract.

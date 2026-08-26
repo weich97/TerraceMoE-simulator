@@ -350,3 +350,51 @@ def test_platform_coverage_reports_the_gap_honestly():
     for p in PLATFORMS.values():
         assert p.provenance and p.notes, "every platform states where it came from"
         assert p.spec().flat.beta_gbps(8 * 1024 ** 2) > 0
+
+
+# ---------------------------------------------------------------- machine profile
+
+
+def test_machine_checklist_never_contradicts_the_model():
+    """A machine the checklist clears must be one the cost model scores above 1.
+
+    The checklist exists to name *why* a machine does or does not qualify, which a
+    bare ratio cannot. That is only worth having if the two can never disagree, so
+    this sweeps ratio and chain tier and asserts the implication in both directions
+    where the model is decisive.
+    """
+    from sim.calibrate import synthetic
+    from sim.core import MoEGeometry, one_hop_call, two_hop_call
+    from sim.profile import profile_from_spec
+    from sim.sweep import CHAIN_SCENARIOS
+
+    g = MoEGeometry(name="chk", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    for _, chain in CHAIN_SCENARIOS:
+        for ratio in (1.0, 1.5, 2.5, 4.0, 8.0, 16.0):
+            spec = synthetic(ratio, chain_us_per_row=chain)
+            r = profile_from_spec(spec, g, ratio)
+            model_wins = one_hop_call(spec, g) / two_hop_call(spec, g) >= 1.0
+            if r["verdict"]["qualifies"]:
+                assert model_wins, (
+                    "checklist cleared ratio=%.1f chain=%.4f but the model scores "
+                    "%.2f -- the two must never disagree"
+                    % (ratio, chain, r["model_ratio"]))
+
+
+def test_checklist_names_the_reason_not_just_the_verdict():
+    """Each failure must carry a machine-readable margin and a readable reason."""
+    from sim.profile import check
+    conds = check(ratio=1.0, R=8, k=6, M=6, ep=8, tokens_per_rank=64,
+                  hidden=2048, chain_us_per_row=0.0875)
+    names = [c.name for c in conds]
+    assert any("q = k/M" in n for n in names)
+    assert any("fast domain" in n for n in names)
+    failed = [c for c in conds if not c.passed]
+    assert failed, "this machine should fail several conditions"
+    for c in failed:
+        assert c.detail and len(c.detail) > 20, "a failure must explain itself"
+    # q=1 and EP inside one domain: the two structural disqualifiers
+    q_cond = next(c for c in conds if "q = k/M" in c.name)
+    dom = next(c for c in conds if "fast domain" in c.name)
+    assert not q_cond.passed and not dom.passed

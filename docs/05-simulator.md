@@ -253,6 +253,9 @@ written up as a protocol anyone with a cluster can run as-is.
 python -m sim.validate_micro     # Tier-1 gate
 python -m sim.validate_sweep     # Tier-1b gate (cross-corpus, two machines)
 python -m sim.compute            # expert-FFN roofline and the bracket it implies
+python -m sim.platforms          # calibrated platforms + where the methods pay off
+python -m sim.profile            # is a given machine worth it, and which condition decides
+python -m sim.phase              # phase spans; refuses step time until calibrated (docs/09)
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)
 python -m sim.overlap            # Tier-2 campaign: overlap model family battle report (docs/07)
