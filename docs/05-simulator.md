@@ -196,6 +196,25 @@ preregistered window, so an x_half much above the fitted interval would fail the
 gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
 further drift shows up immediately.
 
+**How much room x_half actually has, measured against the gates rather than the
+fit.** The bootstrap interval [30, 87] KiB is the spread of a fit to one corpus.
+Sweeping x_half and rerunning every gate gives a different and tighter number:
+**all four gates pass only for x_half in [46, 76] KiB** (`X_HALF_ADMISSIBLE`, with
+the endpoints pinned by a test). Both ends are set by corpora nothing was fitted to
+— the machine A world-16 sweep collected after the freeze rules out the low end, and
+machine B rules out the high end. The shipped 54 KiB was chosen before either check
+and is left where it is, off the centre of that interval on purpose: recentring it
+would be fitting a constant to the gates that are supposed to judge it.
+
+That check also disposes of an attempt that did not work. Two dense 13-size sweeps
+were taken on the calibrated machine specifically to re-fit x_half from its own data
+and retire the borrow. They could not: single-run points in the mid range scatter
+badly enough (one 8 MB point came in 2.7× slower than the 16 MB point beside it)
+that the pinned-α fit lands at x_half above 1 MiB with β∞ at 152–168 GB/s, against
+an asymptote of 103 GB/s directly visible at the largest size in the same sweep.
+That is the α/x_half degeneracy reappearing on a noisy corpus, not a measurement,
+and nothing from it is shipped. **x_half remains a borrowed shape.**
+
 ## Payload: what the model varies, and what it deliberately does not
 
 The cost of a call is driven by payload, so it is worth being explicit about which

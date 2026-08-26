@@ -280,6 +280,43 @@ def test_tier1b_cross_corpus_gate_passes_on_both_machines():
         "the thinnest margin and would need updating")
 
 
+def test_x_half_admissible_interval_is_what_the_gates_say():
+    """Sweeping x_half must reproduce the documented admissible interval.
+
+    x_half is the one constant borrowed from another machine, so what the gates
+    tolerate matters more here than anywhere else. Every gate is rerun at the
+    endpoints and just outside them. Two claims are pinned: the interval is what
+    calibrate.py says it is, and the shipped point estimate sits inside it without
+    sitting at its centre -- the moment someone recentres it, this fails, because
+    that would be fitting the constant to the gates it is supposed to answer to.
+    """
+    from sim.calibrate import (X_HALF_ADMISSIBLE, X_HALF_FLAT, flat_supernode,
+                               second_machine)
+    from sim.validate_micro import validate_micro
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, validate_sweep
+
+    def all_gates(x_half):
+        c = flat_supernode(x_half)
+        return (validate_micro(c, verbose=False)[0]
+                and validate_sweep(c, TARGETS_A, verbose=False)[0]
+                and validate_sweep(second_machine(x_half), TARGETS_B, verbose=False)[0]
+                and validate_sweep(c, TARGETS_C, verbose=False)[0])
+
+    lo, hi = X_HALF_ADMISSIBLE
+    assert all_gates(lo), "the documented lower endpoint no longer passes"
+    assert all_gates(hi), "the documented upper endpoint no longer passes"
+    assert all_gates(X_HALF_FLAT), "the shipped x_half must pass every gate"
+    assert not all_gates(lo - 2 * 1024), "the interval is wider below than documented"
+    assert not all_gates(hi + 2 * 1024), "the interval is wider above than documented"
+
+    assert lo < X_HALF_FLAT < hi
+    centre = (lo + hi) / 2.0
+    assert abs(X_HALF_FLAT - centre) > 0.1 * (hi - lo), (
+        "x_half has drifted to the centre of the gate-admissible interval, which is "
+        "what fitting to the gates looks like; it is meant to stay where the "
+        "measurement put it")
+
+
 # ---------------------------------------------------------------- compute model
 
 

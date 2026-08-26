@@ -85,6 +85,19 @@ BETA_FLAT = 117.8    # 128-card full-fabric a2a: asymptotic bandwidth, fitted on
 #   meaningful with alpha pinned to its direct measurements, which is how it was fitted.
 X_HALF_FLAT = 54 * 1024
 X_HALF_CI = (30 * 1024, 87 * 1024)
+# A second, tighter interval, and a different quantity. X_HALF_CI is the bootstrap
+# spread of a fit to one corpus. X_HALF_ADMISSIBLE is the range over which *every*
+# validation gate still passes -- Tier-1 plus all three Tier-1b corpora -- found by
+# sweeping x_half and rerunning them (tests/test_sim.py pins the endpoints).
+#
+# It is half as wide as the bootstrap interval and it is narrowed from both sides by
+# corpora that were never fitted: the machine A world-16 sweep of 2026-08-26 rules
+# out everything below 46 KiB, and machine B rules out everything above 76 KiB.
+# The shipped 54 was picked before that corpus existed and before this sweep was run;
+# it sits inside, off-centre, and is deliberately left where it is. Moving it to the
+# middle of an interval derived from the gates would be fitting to the gates, which
+# is exactly what the three-tier discipline exists to prevent.
+X_HALF_ADMISSIBLE = (46 * 1024, 76 * 1024)
 BETA_FAST = 122.4    # intra-node 8-card a2a: **physics-endorsed** --
                      #   measured 88.08 MB / 0.719 ms = 122.6,
                      #   physical aggregate egress (6x intra-node links 112.1 + 1x in-package direct 185)/7 = 122.4
@@ -110,13 +123,18 @@ def saturating_beta(beta_inf: float, x_half: float,
     return [(x, beta_inf * x / (x + x_half)) for x in xs]
 
 
-def flat_supernode() -> ClusterSpec:
-    """The machine we actually measured: a bandwidth-flat supernode (cross-node / intra-node = 0.974)."""
+def flat_supernode(x_half: float = None) -> ClusterSpec:
+    """The machine we actually measured: a bandwidth-flat supernode (cross-node / intra-node = 0.974).
+
+    x_half is overridable so the gates can be swept over it (see X_HALF_ADMISSIBLE
+    and tests/test_sim.py); leaving it None uses the shipped estimate.
+    """
     # The full-fabric and cross-node levels saturate with message size; the intra-node
     # level keeps a flat bandwidth because its value is physics-endorsed (link
     # aggregation, 0.2% from measurement) rather than fitted, and the sweep corpora
     # never isolate that level.
-    beta_flat = saturating_beta(BETA_FLAT, X_HALF_FLAT)
+    beta_flat = saturating_beta(BETA_FLAT,
+                                X_HALF_FLAT if x_half is None else x_half)
     beta_fast = [(1e3, BETA_FAST), (1e9, BETA_FAST)]
     beta_slow = [(x, b * CROSS_NODE_RATIO) for x, b in beta_flat]
     return ClusterSpec(
@@ -139,9 +157,15 @@ SECOND_ALPHA_PTS = [(8, 0.130), (16, 0.141), (32, 0.252), (64, 0.231), (128, 0.3
 SECOND_BETA_FLAT = 111.9
 
 
-def second_machine() -> ClusterSpec:
-    """A second machine of the same family; every constant re-fitted, form unchanged."""
-    beta = saturating_beta(SECOND_BETA_FLAT, X_HALF_FLAT)
+def second_machine(x_half: float = None) -> ClusterSpec:
+    """A second machine of the same family; every constant re-fitted, form unchanged.
+
+    x_half is overridable for the same reason as in flat_supernode: it is the one
+    shape both machines share, so a sweep over it has to move both or it is not
+    sweeping the shared parameter at all.
+    """
+    beta = saturating_beta(SECOND_BETA_FLAT,
+                           X_HALF_FLAT if x_half is None else x_half)
     return ClusterSpec(
         name="second_machine (re-fitted from its own corpora)", R=8,
         fast=Level("node-internal", SECOND_ALPHA_PTS, beta),
