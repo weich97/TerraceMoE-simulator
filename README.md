@@ -177,14 +177,6 @@ python -m sim.validate_micro      # simulator Tier-1 validation gate
 python -m sim.sweep               # cross-cluster extrapolation (gate checked at entry; all output labeled "simulated")
 ```
 
-## Honesty statement
-
-Every number here either comes with its derivation or is labeled with how it was measured, and anything tied to specific machines or internal paths has been removed.
-
-The measured machines are calibration samples, not the verdict. Both sit at hierarchy ratio near 1, where the cost model predicts two-hop loses and the measurements confirm it. That is one point on the axis. The methods, the criterion, and the model are published so that anyone on a hierarchical cluster can run the criterion against their own measured numbers and decide, rather than repeating the build.
-
-Results that did not work are reported at the same weight as the ones that did: the step-level model is marked failing with its cause named, the large-cluster claim was withdrawn when an audit showed which corpus it rested on, and a one-sided transport was measured and closed. Two model changes were tried and rejected by the data and are documented as such.
-
 ## License
 
 Apache-2.0
