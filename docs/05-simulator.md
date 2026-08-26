@@ -229,6 +229,17 @@ balanced by construction; applying an inflation factor there would model an effe
 the measurement does not contain, and the gate would reject it for the right reason.
 Skew belongs to end-to-end prediction, which is Tier-2 territory and locked.
 
+**Read as a per-call cost, not a payload cost: the launch path.** A call-count scan
+([docs/09](09-phase-model.md), figure F16) measured one collective in two regimes
+and found the fixed cost is 128 microseconds when the host runs ahead of the device
+and 256 when it has to observe each call. The gap holds its share, 46 to 59% of the
+total, across every payload from 64 KiB to 16 MB, so it is charged per call and
+never as a fraction of the traffic. Two consequences for the numbers on this page:
+the tabulated `alpha` is corroborated at the level by an independent benchmark and
+belongs to the deep-queue regime, and the scan confirms that collectives do not
+pipeline, which is the assumption `core.py` makes when it prices the two-hop chain
+serially.
+
 **Not modelled.** Metadata bytes: gate and slot values are packed alongside the
 payload in the reference implementation, and the model counts only payload rows.
 Capacity factors and token dropping are absent entirely. Both would need

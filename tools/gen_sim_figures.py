@@ -382,4 +382,85 @@ fig.savefig(os.path.join(OUT, "f13-platform-map.svg"), bbox_inches="tight",
             metadata={"Date": None})
 plt.close(fig)
 
-print("7 figures ->", OUT)
+# ------------------------------------------------------- F16 what one collective call costs
+# Like F12, the numbers here are **embedded measurement records** rather than sim
+# output: the call-count scan of 2026-08-26 on the calibrated machine (bench
+# launch_scan.py, all-to-all, median over 7 repetitions of the slowest rank, then
+# averaged over payloads 256 B / 1 KiB / 4 KiB / 16 KiB, which agree to within the
+# run-to-run spread because the wire term at 16 KiB is 0.12 us). Constants distilled
+# from it live in sim/profile.py; the protocol and the reading are in docs/09.
+LS_NS = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+BURST_W8_A = [292.3, 216.3, 175.6, 151.9, 134.9, 158.6, 137.5, 137.4, 133.7]
+BURST_W8_B = [291.1, 207.8, 170.7, 152.0, 142.8, 129.6, 124.3, 124.5, 124.4]
+BURST_W16 = [357.2, 238.1, 191.6, 167.0, 158.5, 136.9, 136.0, 146.7, 128.6]
+SERIAL_W8 = [300.3, 279.3, 281.7, 264.0, 275.7, 266.1, 263.9, 251.2, 299.4]
+SERIAL_W16 = [339.8, 308.6, 295.8, 287.0, 282.6, 300.0, 284.0, 291.0, 280.4]
+DEEP_NS = [64, 256, 512, 1024]                 # plateau check, one node, 1 KiB only
+DEEP_US = [120.0, 102.9, 114.6, 124.6]
+
+from sim.profile import (PER_CALL_DEEP_QUEUE_MS, PER_CALL_HOST_EXPOSED_MS)  # noqa: E402
+
+fig, axes = plt.subplots(1, 2, figsize=(12.4, 4.3),
+                         gridspec_kw={"width_ratios": [1.5, 1.0]})
+
+ax = axes[0]
+ax.plot(LS_NS, BURST_W8_A, "o-", color="#3A7D5C", lw=1.8, ms=4.5,
+        label="queue kept deep, world 8 (node 1)")
+ax.plot(LS_NS, BURST_W8_B, "o--", color="#3A7D5C", lw=1.4, ms=4, alpha=0.75,
+        label="queue kept deep, world 8 (node 2)")
+ax.plot(DEEP_NS, DEEP_US, "o:", color="#3A7D5C", lw=1.2, ms=4, alpha=0.55,
+        label="plateau check to N = 1024")
+ax.plot(LS_NS, BURST_W16, "s-", color="#5B8DB8", lw=1.8, ms=4.5,
+        label="queue kept deep, world 16")
+ax.plot(LS_NS, SERIAL_W8, "^-", color="#B35A5A", lw=1.8, ms=4.5,
+        label="host observes each call, world 8")
+ax.plot(LS_NS, SERIAL_W16, "v-", color="#C4823B", lw=1.8, ms=4.5,
+        label="host observes each call, world 16")
+ax.axvspan(8, 12, color="#8A8F98", alpha=0.12)
+ax.annotate("the calibration harness times\n10 calls and sits here",
+            xy=(9.5, 150), xytext=(1.1, 34), fontsize=8.4, color="#5A6068",
+            arrowprops=dict(arrowstyle="->", color="#8A8F98", lw=1))
+ax.annotate("flat from N = 16 to N = 1024:\ncollectives do not pipeline", xy=(300, 122),
+            xytext=(26, 46), fontsize=8.8, color="#3A7D5C",
+            arrowprops=dict(arrowstyle="->", color="#3A7D5C", lw=1))
+ax.set_xscale("log")
+ax.set_xticks(LS_NS + [1024], [str(n) for n in LS_NS] + ["1024"], fontsize=8)
+ax.set_xlabel("Calls issued back to back before the host waits (N)")
+ax.set_ylabel("Cost per call (microseconds)")
+ax.set_ylim(0, 450)
+ax.set_title("One collective call costs what it costs, twice over\n"
+             "the same call is 128 us when the host runs ahead and 256 us when it does not",
+             fontsize=10.5)
+ax.legend(frameon=False, fontsize=8, loc="upper right", ncol=1)
+_style(ax)
+
+ax = axes[1]
+worlds = [8, 16]
+xs = range(len(worlds))
+alpha_us = [flat_supernode().flat.alpha_ms(w) * 1e3 for w in worlds]
+deep_us = [PER_CALL_DEEP_QUEUE_MS[w] * 1e3 for w in worlds]
+host_us = [PER_CALL_HOST_EXPOSED_MS[w] * 1e3 for w in worlds]
+w = 0.26
+ax.bar([x - w for x in xs], alpha_us, w, color="#8A8F98", edgecolor="white",
+       label="alpha(world) as shipped")
+ax.bar(list(xs), deep_us, w, color="#3A7D5C", edgecolor="white",
+       label="measured, queue deep")
+ax.bar([x + w for x in xs], host_us, w, color="#B35A5A", edgecolor="white",
+       label="measured, host exposed")
+for x, (a, d, h) in zip(xs, zip(alpha_us, deep_us, host_us)):
+    for dx, v in ((-w, a), (0, d), (w, h)):
+        ax.text(x + dx, v + 5, "%.0f" % v, ha="center", fontsize=8.2)
+ax.set_xticks(list(xs), ["world 8", "world 16"], fontsize=9)
+ax.set_ylabel("Fixed cost per call (microseconds)")
+ax.set_ylim(0, 330)
+ax.set_title("The shipped alpha is corroborated at the level\n"
+             "and belongs to the left-hand regime", fontsize=10.5)
+ax.legend(frameon=False, fontsize=8.2, loc="upper left")
+_style(ax)
+
+fig.tight_layout()
+fig.savefig(os.path.join(OUT, "f16-launch-cost.svg"), metadata={"Date": None},
+            bbox_inches="tight")
+plt.close(fig)
+
+print("8 figures ->", OUT)

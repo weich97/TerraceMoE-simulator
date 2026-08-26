@@ -446,13 +446,13 @@ def test_core_does_not_apply_skew():
 
 
 def test_launch_cost_is_bounded_and_second_order():
-    """The unmeasured launch split must stay a small term, and stay bounded.
+    """The launch split must stay a small term against the arrival chain.
 
     Two-hop issues one more collective, so launch enters the comparison exactly
-    once. The bound is alpha(8), the smallest measured alpha, since that value
-    already contains both launch and the collective's own fixed cost. If this ever
-    becomes a large term the conclusion changes and the call-count scan in docs/09
-    stops being optional.
+    once. The scan of docs/09 has since measured it (HOST_EXPOSURE_MS), and the
+    bound below is what the sweep was quoted against before that. Both are held
+    here: the measured point must sit under the bound, and neither may turn launch
+    into a first-order term.
     """
     from sim.core import MoEGeometry
     from sim.profile import LAUNCH_UPPER_BOUND_MS, launch_sensitivity
@@ -473,3 +473,70 @@ def test_launch_cost_is_bounded_and_second_order():
         "launch moved the breakeven by %.2f, which is no longer second order "
         "against the arrival chain's 2.4; run the scan"
         % (at_bound["breakeven"] - bes[0]))
+
+
+def test_measured_launch_brackets_the_shipped_alpha():
+    """The call-count scan must corroborate alpha, not quietly replace it.
+
+    The scan of 2026-08-26 measured one collective call in two regimes: with the
+    host running ahead of the device, and with the host observing every call. The
+    shipped alpha belongs to the first. Three things have to hold or the table and
+    the measurement have drifted apart and one of them is wrong:
+
+      1. every measured world brackets alpha between the two regimes,
+      2. the deep-queue reading agrees with alpha inside the 20% run-to-run drift
+         that calibrate.py documents,
+      3. the two regimes really are distinguishable -- if they ever collapse, the
+         serial arm stopped measuring what it claims to.
+    """
+    from sim.calibrate import ALPHA_PTS, flat_supernode
+    from sim.profile import (HOST_EXPOSURE_MS, PER_CALL_DEEP_QUEUE_MS,
+                             PER_CALL_HOST_EXPOSED_MS)
+
+    alpha = dict(ALPHA_PTS)
+    c = flat_supernode()
+    for world, deep in PER_CALL_DEEP_QUEUE_MS.items():
+        exposed = PER_CALL_HOST_EXPOSED_MS[world]
+        assert deep < exposed, "world %d: the two regimes collapsed" % world
+        a = c.flat.alpha_ms(world)
+        assert a == alpha[world], "world %d is not a tabulated alpha point" % world
+        assert deep <= exposed and a <= exposed, (
+            "world %d: alpha %.3f escaped the measured bracket [%.3f, %.3f]"
+            % (world, a, deep, exposed))
+        drift = abs(a - deep) / deep
+        assert drift <= 0.20, (
+            "world %d: alpha %.3f vs measured %.3f is %.0f%% apart, beyond the "
+            "20%% drift the calibration claims" % (world, a, deep, 100 * drift))
+
+    gaps = [PER_CALL_HOST_EXPOSED_MS[w] - PER_CALL_DEEP_QUEUE_MS[w]
+            for w in PER_CALL_DEEP_QUEUE_MS]
+    assert min(gaps) <= HOST_EXPOSURE_MS <= max(gaps), (
+        "HOST_EXPOSURE_MS %.3f is not inside the measured gaps %s"
+        % (HOST_EXPOSURE_MS, ["%.3f" % g for g in gaps]))
+
+
+def test_host_exposure_does_not_outrank_the_arrival_chain():
+    """Fusing the chain must stay worth more than removing the host.
+
+    Both are one-term changes to the same comparison, so the repository has to say
+    which to do first. The measured host exposure is charged to two-hop as one
+    extra collective; the chain is priced by its own scenario tier. If the ordering
+    ever reverses, docs/09 and sim/profile.py both say the wrong thing.
+    """
+    from sim.core import MoEGeometry
+    from sim.profile import HOST_EXPOSURE_MS, launch_sensitivity
+    from sim.calibrate import CHAIN_US_PER_ROW
+
+    g = MoEGeometry(name="lat", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    with_chain = launch_sensitivity(g, CHAIN_US_PER_ROW,
+                                    deltas_ms=(0.0, HOST_EXPOSURE_MS))
+    no_chain = launch_sensitivity(g, 0.0, deltas_ms=(0.0, HOST_EXPOSURE_MS))
+
+    exposure_cost = with_chain[1]["breakeven"] - with_chain[0]["breakeven"]
+    chain_cost = with_chain[0]["breakeven"] - no_chain[0]["breakeven"]
+    assert exposure_cost > 0, "charging an extra call must not help two-hop"
+    assert chain_cost > 4 * exposure_cost, (
+        "the arrival chain is worth %.2f of breakeven and host exposure %.2f; "
+        "they are now the same order, so docs/09 must stop saying fuse first"
+        % (chain_cost, exposure_cost))

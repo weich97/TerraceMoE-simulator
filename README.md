@@ -121,6 +121,33 @@ the bootstrap interval of `x_half`. Two anchors read off it: at a hierarchy rati
 fabric the most favourable case reaches 1.04, which says the byte account alone is
 near neutral there and what actually decides is implementation overhead.
 
+### What one collective call actually costs
+
+![Launch cost](docs/assets/f16-launch-cost.svg)
+
+`alpha(world)` is the fixed cost of a call, and a call-count scan measured it
+directly rather than reading it off a fit: N collectives issued back to back at
+fixed world, N from 1 to 1024, payloads from 256 B to 16 MB, two worlds, two nodes.
+Three results, all of them load-bearing elsewhere in this repository.
+
+- **Collectives do not pipeline.** Per-call cost stops falling at N around 16 and
+  stays flat to N = 1024. Two back-to-back calls cost twice one, which is the
+  assumption `sim/core.py` makes when it prices the two-hop chain serially.
+- **The shipped `alpha` is corroborated at the level**: 128 microseconds measured
+  against a tabulated 111 at world 8, 143 against 157 at world 16, both inside the
+  20% run-to-run drift the calibration documents, from a different benchmark months
+  later. The 41% step between the two table entries is *not* confirmed; the scan
+  sees 12%, inside its own spread.
+- **The same call costs twice as much when the host has to watch it.** 128
+  microseconds with the queue deep, 256 when the host observes each call before
+  issuing the next. The gap is a per-call cost that holds its share, 46 to 59%,
+  across every payload from 64 KiB to 16 MB.
+
+Charging two-hop one extra host exposure moves the breakeven ratio from 3.87 to
+4.04. Removing the arrival chain instead moves it from 3.87 to 1.07. The ordering is
+the point: fuse the chain first, and the launch path is the next thing worth paying
+for, not the first.
+
 ### Where the wins and losses come from
 
 ![Breakeven map](docs/assets/f8-breakeven-map.svg)

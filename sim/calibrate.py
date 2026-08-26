@@ -43,6 +43,17 @@ from .core import ClusterSpec, Level
 #   fact: **on this machine alpha(16)+alpha(8) ≈ alpha(128)** -- two-hop saves almost
 #   nothing on alpha. Whether alpha is savable is a machine property; do not assume it
 #   across machines.
+#
+#   **Independently re-measured 2026-08-26** by a call-count scan (sim/profile.py,
+#   PER_CALL_DEEP_QUEUE_MS), months later and with a different benchmark: 128 us at
+#   world 8 against the 111 here, and 143 at world 16 against 157. Both sit inside the
+#   20% run-to-run drift this file documents, so the two entries are corroborated at
+#   the level. The *step* between them is not: alpha rises 41% from world 8 to 16
+#   where the scan rises 12%, and 12% is inside that scan's own 15% payload spread.
+#   Neither number moves. What the scan adds is the convention: **alpha as tabulated
+#   belongs to the deep-queue regime**, where the host stays far enough ahead that
+#   submission hides under execution. Where the host has to observe each call the
+#   same collective costs about twice as much, and that regime is not priced here.
 ALPHA_PTS = [(2, 0.09), (8, 0.111), (16, 0.157), (128, 0.378),
              (256, 0.735), (512, 1.859)]
 

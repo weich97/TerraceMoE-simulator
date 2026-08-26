@@ -159,29 +159,71 @@ def check(ratio: float, R: int, k: int, M: int, ep: int,
 #   device-initiated kernel put   36-57 us   (one-sided bench floor, 7 serial puts)
 #   host-initiated point-to-point 257-268 us (PyTorch cross-device copy_)
 #   host readback of split sizes  44 us      (already a separate term in core.py)
-# The shipped alpha(world) lumps launch together with the collective's own fixed
-# cost, because no measurement here separates them; doing so needs a call-count
-# scan at fixed world, which is one node and a few minutes but has not been run.
-# What we can say without it: launch <= alpha(8) = 111 us, since the smallest
-# measured alpha contains both.
-LAUNCH_UPPER_BOUND_MS = 0.111
 LAUNCH_DEVICE_INITIATED_MS = (0.036, 0.057)
 LAUNCH_HOST_P2P_MS = (0.257, 0.268)
 
+# The call-count scan that docs/09 asked for has now been run: N back-to-back tiny
+# collectives at fixed world, N over 1..256, four payloads from 256 B to 16 KiB,
+# two ops, seven repetitions, worlds 8 and 16. It gives the per-call fixed cost
+# directly instead of leaving it inside alpha, and it turns out to depend less on
+# the world than on **who is waiting**.
+#
+#   deep queue    the host runs ahead and the device never idles. The per-call
+#                 cost stops falling past N ~ 16 and holds flat to N = 256, so
+#                 collectives do not pipeline: two cost twice one. This is the
+#                 regime the shipped alpha corresponds to.
+#   host exposed  the host observes each call before issuing the next, which is
+#                 what happens wherever a device value has to come back (a splits
+#                 readback, a dynamic shape, Python control flow). Per-call cost
+#                 roughly doubles.
+#
+# Payload independence holds across the whole scan: 256 B and 16 KiB give the same
+# per-call cost to within the run-to-run spread, as they must, since the wire term
+# at 16 KiB is 0.12 us.
+# World 8 is the mean of two independent single-node scans (133 and 124 us) and a
+# third that pushed N to 1024 on one of them and landed at 117, so the whole set
+# spans 117-133 for a nominal 128. World 16 spans both nodes and has one scan.
+PER_CALL_DEEP_QUEUE_MS = {8: 0.128, 16: 0.143}      # a2a, plateau at N >= 64
+PER_CALL_DEEP_QUEUE_RANGE_MS = {8: (0.117, 0.133)}  # three runs, two nodes
+PER_CALL_HOST_EXPOSED_MS = {8: 0.256, 16: 0.282}    # a2a, host waits per call (w8: 245 and 267)
+PER_CALL_SPREAD = 0.15                              # across payloads, same session
+HOST_SUBMIT_MS = {8: 0.056, 16: 0.074}              # host CPU time to enqueue one call (w8: 44 and 68)
+
+# The gap between the two regimes is what a device-initiated stack removes. It is
+# world-independent to within the spread, 128 us at world 8 and 139 at world 16,
+# of which roughly half is submission and the rest is completion detection.
+HOST_EXPOSURE_MS = 0.130
+
+# What this does and does not settle for the shipped alpha table. Read against
+# ALPHA_PTS, the deep-queue floor confirms both entries it can reach -- 128 us
+# measured against alpha(8) = 111, and 143 against alpha(16) = 157 -- each inside
+# the 20% run-to-run drift the calibration documents, from a different benchmark
+# months later. It does not confirm the *step* between them: alpha rises 41% from
+# world 8 to 16 where the direct measurement rises 12%, and 12% sits inside the 15%
+# payload spread, so this scan cannot resolve the step either way. Nothing here
+# changes the table; the two conclusions are that alpha is corroborated at the
+# level and that it belongs to the deep-queue regime.
+LAUNCH_UPPER_BOUND_MS = 0.111    # retained: pre-measurement bound, still the value
+                                 # launch_sensitivity's old sweep was quoted against
+
 
 def launch_sensitivity(geom, chain_us_per_row: float,
-                       deltas_ms=(0.0, 0.04, 0.08, 0.111, 0.16, 0.25)) -> list:
-    """How much the unmeasured launch split could move the verdict.
+                       deltas_ms=(0.0, 0.04, 0.08, 0.111, 0.130, 0.16, 0.25)) -> list:
+    """How much the launch split moves the verdict.
 
-    Two-hop issues one more collective than one-hop, so a change of launch cost
-    shifts the comparison by exactly one launch. Sweeping that one term over its
-    whole plausible range answers whether measuring it properly is worth machine
-    time. On the reference geometry it is not: the breakeven moves 1.45 to 1.78
-    across the full sweep and only to 1.60 at the defensible upper bound, against
-    3.87 to 1.45 for the arrival chain.
+    Two-hop issues one more collective than one-hop, so charging an extra fixed
+    cost per call shifts the comparison by exactly one of them. The sweep was
+    written before the cost was measured; it now has a measured point in it.
 
-    The sweep does **not** answer whether to adopt a device-initiated stack. That
-    also changes overlap, since the host leaves the critical path, and overlap is
+    At the measured host exposure of HOST_EXPOSURE_MS = 0.130, the breakeven on
+    the reference geometry moves from 3.87 to 4.04 -- under 5%, because the
+    arrival chain dominates everything else on this machine. Remove the chain and
+    the same 0.130 moves the breakeven from 1.07 to 1.24, which is 16%. So the
+    ordering is unchanged and worth stating plainly: fuse the chain first, and
+    only then does host exposure become the next thing worth paying for.
+
+    The sweep still does **not** answer whether to adopt a device-initiated stack.
+    Removing the host from the critical path also changes overlap, and overlap is
     the Tier-2 gap this repository cannot price.
     """
     from .calibrate import synthetic

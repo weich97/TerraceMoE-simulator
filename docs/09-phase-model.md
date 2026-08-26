@@ -102,33 +102,111 @@ fact.
 Everything beyond the minimum buys holdouts, not mechanism: 4–6 more geometries
 across the three axes, same protocol, to satisfy step 5.
 
-## A second, much cheaper measurement: separating launch from fabric
+## The launch measurement: run, and what it found
 
-The shipped `alpha(world)` lumps the per-call launch cost together with the
-collective's own fixed cost, because nothing here separates them. Splitting them
-matters in principle, since two-hop issues one more collective than one-hop and
-launch is per call rather than per world, and because a device-initiated stack has a
-very different launch cost: measured here at 36 to 57 microseconds for a kernel-side
-put against 257 to 268 for a host-side point-to-point.
+This section used to describe a measurement worth taking. It was taken on
+2026-08-26, on two nodes of the calibrated machine, and this is the result.
 
-**The scan.** One node, eight ranks, minutes. Issue N back-to-back tiny collectives
-at fixed world without synchronising between them, for N over a decade, and fit time
-against N. The slope is the per-call cost that cannot be pipelined away, the
-intercept is what a single call costs beyond it. Repeat at world 8 and 16 to check
-that the per-call term really is world-independent, which is the assumption the split
-rests on.
+**What was run.** N back-to-back tiny collectives at fixed world with no
+synchronisation between them, one sync at the end, N from 1 to 256, payloads 256 B
+to 16 KiB, all-to-all and all-reduce, seven repetitions each, at world 8 and world
+16. Then the whole scan again in a second mode where the host waits for each call to
+land before issuing the next. World 8 was run on each of the two nodes separately,
+which gives the constant an independent replicate rather than a single reading, and
+once more with N pushed to 1024 to check that the plateau is a plateau. Every number
+below is the median over repetitions of the slowest rank.
 
-**Do it only when a node is free anyway.** The sensitivity is already bounded without
-it: launch cannot exceed `alpha(8) = 111` microseconds, since the smallest measured
-alpha contains both terms, and sweeping the whole plausible range moves the breakeven
-hierarchy ratio from 1.45 to 1.78, reaching only 1.60 at that bound. Against the
-arrival chain, which moves the same quantity from 3.87 to 1.45, this is second order.
-`sim/profile.py::launch_sensitivity` reproduces the sweep.
+**Per-call cost, all-to-all, microseconds:**
 
-**What the scan would not settle.** Whether to adopt a device-initiated dispatch
-stack. That removes the host from the critical path and therefore changes overlap,
-which is exactly the gap this page exists to close. The launch scan tightens a small
-known term; the overlap protocol above is what answers the interesting question.
+| | world 8 | world 16 |
+|---|---|---|
+| deep queue, host runs ahead | 128  (117, 124, 133 over three runs) | 143 |
+| host observes each call | 256  (245, 267 over two nodes) | 282 |
+| gap | 128 | 139 |
+| of which host CPU spent enqueuing | 56  (44, 68) | 74 |
+
+Four things fall out.
+
+**Collectives do not pipeline.** Per-call cost stops falling at N around 16 and is
+flat from there to N = 1024, a sixty-fourfold range. Two back-to-back collectives cost
+twice one. `sim/core.py` prices the two-hop chain serially on the strength of an
+implementation note; that is now measured rather than asserted, which matters
+because it is the assumption the whole two-hop comparison rests on.
+
+**The cost is a fixed cost, not a payload cost.** 256 B and 16 KiB give the same
+per-call number to within the run-to-run spread, as they have to: the wire term at
+16 KiB is 0.12 microseconds.
+
+**It is roughly world-independent over the range measured.** 128 against 143 for a
+doubling of world, a 12% step, inside the 15% spread across payloads in the same
+session and comparable to the 13% spread between the two nodes themselves. The
+shipped `alpha` steps 41% over the same range. Both alpha entries are individually
+confirmed within the 20% drift the calibration documents, so nothing moves, but the
+step itself is not resolved by this scan and should not be quoted as confirmed.
+
+**Half the per-call cost is the host, and it is hidden only while the queue is
+deep.** Submission costs 44 to 74 microseconds of host CPU. When the host runs
+ahead that disappears under device execution. When something forces the host to
+observe a call before issuing the next, per-call cost roughly doubles, and the extra
+130 microseconds splits about evenly between submission and completion detection.
+The two nodes disagree on the submission half by 44 against 68 microseconds, so
+treat that split as indicative and the total gap as the measured quantity.
+
+**And you cannot outgrow it by sending more.** The scan was repeated at world 16
+over payloads from 64 KiB to 16 MB, which spans everything an MoE dispatch actually
+sends. The gap between the two regimes does not close:
+
+| payload per rank | deep queue | host exposed | gap | gap as share |
+|---|---|---|---|---|
+| 64 KiB | 160 | 297 | 137 | 46% |
+| 256 KiB | 150 | 302 | 153 | 51% |
+| 1 MB | 134 | 283 | 149 | 53% |
+| 4 MB | 123 | 301 | 178 | 59% |
+| 16 MB | 201 | 429 | 228 | 53% |
+
+Microseconds per call. Repeated at world 8 on the other node the gap runs 90 to 228
+microseconds and 39 to 59% of the total, so this is not a property of one world or
+one node. Host exposure is a per-call cost, so it grows with the number of
+collectives and not with what they carry; at every payload measured it is about half
+the total. That is why it enters the comparison as one extra call and not as a
+fraction of the traffic.
+
+**The one host observation an MoE dispatch cannot avoid is the cheap one.** A
+variable-length all-to-all needs its per-peer counts on the host before it can be
+issued, and `core.py` carries 44 microseconds for that readback. Running the same
+two-regime scan on a readback puts it at 78 microseconds with the queue deep and 123
+when the host is already serialized, against 132 and 238 for an all-to-all. Two
+readings, and only the second is a result. The absolute 78 is not comparable to the
+shipped 44, because this op bundles a small device reduce with the readback so that
+there is something to wait for, and the shipped number prices the copy alone. What
+is comparable is the *penalty for being exposed*: 45 microseconds for the readback
+against 106 for a collective. The splits sync is the least of the host observations
+in the chain, which is the assumption behind treating it as a small additive
+constant.
+
+### What it changes
+
+Not much, and that is the useful part. Charging two-hop one extra host exposure of
+130 microseconds moves the breakeven hierarchy ratio on the reference geometry from
+3.87 to 4.04. Remove the arrival chain and the same 130 microseconds moves it from
+1.07 to 1.24. So the ordering is confirmed rather than disturbed: **the arrival
+chain is worth more than the launch path, and fusing it comes first.**
+`sim/profile.py::launch_sensitivity` carries the measured point in its sweep.
+
+### What it does not settle
+
+Which regime a real training step is in. Two collectives chained on one stream stay
+in the deep-queue regime, because the device resolves the dependency without the
+host. But an MoE dispatch is not two collectives on one stream: the variable-length
+exchange requires a splits readback, which is a host observation by construction,
+and `core.py` already carries 44 microseconds for it. Whether that readback is the
+only host observation per layer, or whether framework-side control flow adds more,
+is a timeline question, and the timeline protocol above is what answers it.
+
+It also does not settle whether to adopt a device-initiated stack. The measured
+device-side put floor of 36 to 57 microseconds against the 130 of host exposure says
+the ceiling on that change is real. But removing the host from the critical path
+also changes overlap, and overlap is exactly the gap this page exists to close.
 
 ## What it would unlock
 
