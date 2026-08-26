@@ -616,6 +616,49 @@ def test_measured_launch_brackets_the_shipped_alpha():
         % (HOST_EXPOSURE_MS, ["%.3f" % g for g in gaps]))
 
 
+def test_arrival_chain_is_only_linear_above_the_measured_floor():
+    """The chain constant carries the whole verdict, so its limits are pinned.
+
+    Three things, in order of how much they matter.
+
+    The reference geometry has to sit inside the range where the linear form was
+    verified, or the headline breakeven is quoting a model outside its validity.
+
+    The re-measured level has to stay inside the drift the calibration claims,
+    because that is the only reason the shipped value was not replaced by the better
+    evidenced one.
+
+    And the direction has to stay recorded: adopting the re-measurement raises the
+    breakeven rather than lowering it. If that ever flips, the argument for leaving
+    the constant alone becomes self-serving and has to be re-made.
+    """
+    from sim.calibrate import (CHAIN_FLOOR_MS, CHAIN_LINEAR_MIN_ROWS,
+                               CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_REMEASURED)
+    from sim.core import MoEGeometry
+    from sim.uncertainty import breakeven_ratio
+
+    g = MoEGeometry(name="ref", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    assert g.rows_hop_b() >= CHAIN_LINEAR_MIN_ROWS, (
+        "the reference geometry has %d Hop B rows, below the %d where the linear "
+        "chain form was verified" % (g.rows_hop_b(), CHAIN_LINEAR_MIN_ROWS))
+
+    drift = abs(CHAIN_US_PER_ROW_REMEASURED - CHAIN_US_PER_ROW) / CHAIN_US_PER_ROW
+    assert drift <= 0.20, (
+        "the chain re-measurement is %.0f%% from the shipped value, outside the 20%% "
+        "drift that justifies leaving it alone" % (100 * drift))
+
+    assert breakeven_ratio(CHAIN_US_PER_ROW_REMEASURED) > breakeven_ratio(CHAIN_US_PER_ROW), (
+        "adopting the chain re-measurement now *helps* two-hop; keeping the older, "
+        "less well evidenced constant would then need a different justification")
+
+    # The floor is a real gap, not a rounding difference, or there is nothing to warn
+    # about and the boundary text should go.
+    assert CHAIN_FLOOR_MS > 2.0 * CHAIN_US_PER_ROW * 1024 / 1000.0, (
+        "the measured chain floor no longer exceeds what the linear form predicts at "
+        "1024 rows; the small-geometry boundary in calibrate.py is stale")
+
+
 def test_host_exposure_does_not_outrank_the_arrival_chain():
     """Fusing the chain must stay worth more than removing the host.
 

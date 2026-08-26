@@ -341,11 +341,19 @@ tier_colors = {tier_names[0]: "#B35A5A", tier_names[1]: "#5B8DB8",
 
 fig, ax = plt.subplots(figsize=(9.6, 4.6))
 xs = [0.9, 40]
+# The two cheapest tiers sit within 8% of the axis width of each other on a log
+# scale, so their two-line labels collide if both are hung at the same height.
+# Stagger by rank rather than by hard-coded position, so the figure survives a
+# recalibration that moves the thresholds.
+_label_y = {t: y for t, y in
+            zip(sorted(tier_colors, key=lambda t: bes[t]), (5.62, 4.30, 5.62))}
 for tier, col in tier_colors.items():
     be = bes[tier]
     ax.axvline(be, color=col, lw=1.6, ls="--")
-    ax.text(be, 5.62, " %s\n breakeven %.2f" % (tier.split("(")[0].strip(), be),
-            color=col, fontsize=8.2, va="top", ha="left")
+    ax.text(be, _label_y[tier], " %s\n breakeven %.2f"
+            % (tier.split("(")[0].strip(), be),
+            color=col, fontsize=8.2, va="top", ha="left", zorder=5,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
 ax.axvspan(0.9, min(bes.values()), color="#B35A5A", alpha=0.07)
 
 ys = list(range(len(ARCHETYPES)))
@@ -356,12 +364,14 @@ for y, a in zip(ys, ARCHETYPES):
     ax.scatter([a.ratio_nominal], [y], s=130, color=col, zorder=3,
                edgecolor="white", linewidth=1.2)
     ax.text(a.ratio_nominal * 1.14, y, "%s  (%d/3 tiers)" % (a.label, n_yes),
-            va="center", fontsize=8.6, color="#222")
+            va="center", fontsize=8.6, color="#222", zorder=5,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
 
 for key, marker, lbl in (("A", "D", "platform A, measured"),):
     ax.scatter([1.03], [-0.85], s=95, marker=marker, color="#333", zorder=4)
     ax.text(1.03 * 1.14, -0.85, "%s (ratio 1.03)" % lbl, va="center",
-            fontsize=8.6, color="#333")
+            fontsize=8.6, color="#333", zorder=5,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
 
 ax.set_yticks([])
 ax.set_ylim(-1.6, 5.7)

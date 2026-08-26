@@ -114,6 +114,33 @@ CROSS_NODE_RATIO = 0.974   # cross-node / intra-node (pairwise probes, 360 pairs
 SPLITS_SYNC_MS = 0.044     # host-side retrieval of splits for variable-length a2a, per call (measured 0.042-0.046)
 CHAIN_US_PER_ROW = 2.15 * 1000.0 / 24576.0   # arrival chain, PyTorch op chain, per row
                                              # (measured 2.15 ms/call @ 24576 rows)
+# This is the constant everything hinges on -- it alone moves the breakeven ratio
+# from 1.07 to 3.87 -- and until 2026-08-26 it rested on that single point. It was
+# then swept properly: nine row counts from 1024 to 65536, on each of two nodes,
+# thirty iterations each, op-level and single-card (bench/machine/dispatch_oplevel).
+#
+# **The linear form holds where it is used.** Above 8192 rows the per-row cost is
+# 0.0865 to 0.1018 us, a 15% spread with no trend, and the two nodes agree to 2%.
+# The reference geometry sits at 24576 rows, inside that range.
+#
+# **The level re-measures 13% higher**: 0.0987 us/row today against the 0.0875 here,
+# and 2.50 ms at the original 24576-row point against 2.15. Inside the documented
+# 20% drift, so the constant does not move -- but note which way it would move if it
+# did. Adopting 0.0987 raises the breakeven from 3.87 to 4.23, against the method
+# this repository is proposing. Recorded because the new evidence is the stronger of
+# the two, eighteen measurements against one, and a future recalibration should
+# probably take it.
+CHAIN_US_PER_ROW_REMEASURED = 0.0987      # 2026-08-26, 9 row counts x 2 nodes
+# **And a boundary the linear form does not have.** Below about 8192 rows the chain
+# hits a fixed floor: 0.248 ms at 1024 rows where the linear form predicts 0.090.
+# The model is therefore optimistic about the arrival chain on small geometries, and
+# optimistic about the chain means optimistic about two-hop, since only two-hop pays
+# it. At 3072 rows the gap is 23%, at 6144 rows 7%, and above 8192 it closes. Not
+# applied in core.py, for the same reason the skew model is not: it would model an
+# effect the Tier-1 targets do not contain. It is a stated limit on where the model
+# may be used, and tests/test_sim.py pins it.
+CHAIN_FLOOR_MS = 0.248                    # whole-chain wall clock at 1024 rows
+CHAIN_LINEAR_MIN_ROWS = 8192              # below this the linear form under-prices
 
 
 def saturating_beta(beta_inf: float, x_half: float,

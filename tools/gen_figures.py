@@ -21,6 +21,11 @@ plt.rcParams.update({
     "font.family": "sans-serif",
     "axes.unicode_minus": False,
     "figure.dpi": 100,
+    # Byte-for-byte reproducible SVGs: a fixed salt pins the element ids that
+    # matplotlib would otherwise randomise, and every savefig below strips the
+    # timestamp. Without both, rerunning this script rewrites six files with no
+    # change of content and a diff that hides real ones.
+    "svg.hashsalt": "terracemoe-route-ablation",
 })
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +91,8 @@ ax.set_title("Quality cost: T-Route +0.0034 nats, 1/5 of the tolerance (the 0.1 
 ax.legend(frameon=False, loc="upper left")
 _style(ax)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f1-loss-axis.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f1-loss-axis.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 # ---------------------------------------------------------------- F2 per-seed
@@ -113,7 +119,8 @@ ax.set_title("24/24 paired deltas share a positive sign: the difference is real,
 ax.legend(frameon=False, loc="upper left")
 _style(ax)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f2-per-seed.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f2-per-seed.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 # ---------------------------------------------------------------- F3 downstream TOST
@@ -151,7 +158,8 @@ ax2.set_title("A single readout can fool you: across three readouts it swings 1�
 ax2.legend(frameon=False, fontsize=8.5)
 _style(ax2)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f3-downstream.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f3-downstream.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 # ---------------------------------------------------------------- F4 load axis
@@ -170,7 +178,8 @@ for a, dat, ttl, better in ((ax, ENT, "expert-level load entropy Δ (higher = mo
     _style(a)
 fig.suptitle("Load axis: none of the three constraint tiers is worse than unconstrained (paired, n=4)", y=1.02)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f4-load-axis.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f4-load-axis.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 # ---------------------------------------------------------------- F5 step-time neutrality
@@ -189,7 +198,8 @@ ax.set_ylabel("G = t(unconstrained) / t(T-Route)")
 ax.set_title("Step time: both arms use the baseline a2a and differ only in routing — T-Route charges no step-time tax")
 _style(ax)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f5-step-neutral.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f5-step-neutral.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 # ---------------------------------------------------------------- F6 forerunner 2x2
@@ -212,7 +222,8 @@ ax2.set_ylabel("load entropy (higher = balanced)")
 ax2.set_title("Same testbed: full has the highest load entropy", fontsize=10)
 _style(ax2)
 fig.tight_layout()
-fig.savefig(os.path.join(OUT, "f6-forerunner.svg"), bbox_inches="tight")
+fig.savefig(os.path.join(OUT, "f6-forerunner.svg"), bbox_inches="tight",
+            metadata={"Date": None})
 plt.close(fig)
 
 print("6 figures ->", OUT)
