@@ -310,4 +310,57 @@ fig.tight_layout()
 fig.savefig(os.path.join(OUT, "f12-onesided.svg"), metadata={"Date": None}, bbox_inches="tight")
 plt.close(fig)
 
-print("6 figures ->", OUT)
+# ------------------------------------------------------- F13 where the methods pay off
+from sim.platforms import ARCHETYPES, platform_map          # noqa: E402
+from sim.uncertainty import mc_band                          # noqa: E402
+
+rows = platform_map()
+bes = rows[0]["breakevens"]
+tier_names = list(bes)
+tier_colors = {tier_names[0]: "#B35A5A", tier_names[1]: "#5B8DB8",
+               tier_names[2]: "#3A7D5C"}
+
+fig, ax = plt.subplots(figsize=(9.6, 4.6))
+xs = [0.9, 40]
+for tier, col in tier_colors.items():
+    be = bes[tier]
+    ax.axvline(be, color=col, lw=1.6, ls="--")
+    ax.text(be, 5.62, " %s\n breakeven %.2f" % (tier.split("(")[0].strip(), be),
+            color=col, fontsize=8.2, va="top", ha="left")
+ax.axvspan(0.9, min(bes.values()), color="#B35A5A", alpha=0.07)
+
+ys = list(range(len(ARCHETYPES)))
+for y, a in zip(ys, ARCHETYPES):
+    n_yes = sum(1 for t in tier_names if a.ratio_nominal >= bes[t])
+    col = "#3A7D5C" if n_yes == 3 else ("#C4823B" if n_yes else "#B35A5A")
+    ax.plot([0.95, a.ratio_nominal], [y, y], color=col, lw=1.1, alpha=0.35, zorder=1)
+    ax.scatter([a.ratio_nominal], [y], s=130, color=col, zorder=3,
+               edgecolor="white", linewidth=1.2)
+    ax.text(a.ratio_nominal * 1.14, y, "%s  (%d/3 tiers)" % (a.label, n_yes),
+            va="center", fontsize=8.6, color="#222")
+
+for key, marker, lbl in (("A", "D", "platform A, measured"),):
+    ax.scatter([1.03], [-0.85], s=95, marker=marker, color="#333", zorder=4)
+    ax.text(1.03 * 1.14, -0.85, "%s (ratio 1.03)" % lbl, va="center",
+            fontsize=8.6, color="#333")
+
+ax.set_yticks([])
+ax.set_ylim(-1.6, 5.7)
+ax.set_xscale("log")
+ax.set_xlim(0.95, 42)
+ax.set_xticks([1, 1.5, 2, 3, 5, 8, 12, 18, 30])
+ax.set_xticklabels(["1", "1.5", "2", "3", "5", "8", "12", "18", "30"], fontsize=8.5)
+ax.minorticks_off()
+ax.set_xlabel("Hierarchy ratio: fast-side bandwidth / slow-side bandwidth (log scale)")
+ax.set_title("Where hierarchical dispatch pays off. Vertical lines are the breakeven "
+             "ratio for each\nimplementation tier, so the arrival chain moves the "
+             "threshold as much as the fabric does.", fontsize=10.5)
+ax.spines[["top", "right", "left"]].set_visible(False)
+ax.grid(axis="x", alpha=0.25, linewidth=0.6)
+ax.set_axisbelow(True)
+fig.tight_layout()
+fig.savefig(os.path.join(OUT, "f13-platform-map.svg"), bbox_inches="tight",
+            metadata={"Date": None})
+plt.close(fig)
+
+print("7 figures ->", OUT)
