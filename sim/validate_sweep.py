@@ -16,7 +16,7 @@ the accuracy the gate was set to demand and no better.
 
 ## What is being tested, precisely
 
-Machine A is the calibrated machine. Machine B is a second machine of the same
+Machine A is where the constants are fitted. Machine B is a second machine of the same
 family. Communication-curve constants identifiable from that corpus are fitted for it;
 the level split and implementation-side constants remain assumptions, so this is a
 same-corpus fit/consistency check rather than a full transfer test.

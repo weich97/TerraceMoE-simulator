@@ -1,6 +1,6 @@
 <img src="docs/assets/logo.svg" alt="TerraceMoE Simulator logo" width="84" align="right">
 
-# TerraceMoE Simulator: a measurement-calibrated cost model for hierarchical MoE communication
+# TerraceMoE Simulator: a cost model for hierarchical MoE all-to-all communication
 
 **What this is:** a communication-call cost model for screening hierarchical MoE
 all-to-all after calibrating it on the target machine. It is not a training-throughput
@@ -135,9 +135,9 @@ answers to three gates rather than to a plot that looks right.
 
 | Gate | What it checks | Result |
 |---|---|---|
-| Tier-1 | one-hop and two-hop times measured directly on the calibrated machine | **pass**, 4.1% median error, 24.5% worst |
+| Tier-1 | one-hop and two-hop times measured directly on platform A | **pass**, 4.1% median error, 24.5% worst |
 | Tier-1b | 64 targets from another benchmark family; machine B is a same-corpus fit/consistency check, while 14 C4 targets on A are post-freeze holdouts | **pass** on all three corpora, 1.9% / 9.3% / 8.0% median |
-| Tier-1b drift probe | a fourth corpus, 13 world-8 targets on the calibrated machine | **fail**, 15.1% median with a −9.1% bias, traced to one constant and left unretuned |
+| Tier-1b drift probe | a fourth corpus, 13 world-8 targets on platform A | **fail**, 15.1% median with a −9.1% bias, traced to one constant and left unretuned |
 | Tier-2 | end-to-end step time on 7 training geometries | **fail, and step-level extrapolation stays locked** |
 
 The band above is 400 Monte Carlo draws over the calibration uncertainty, including
@@ -182,7 +182,7 @@ the measured-chain and hypothetical-fused targets move the corrected breakeven f
 3.98 to 1.49. At ratio 3.2 this is a sensitivity comparison, not a prediction for a
 named machine.
 
-### End-to-end measurements on the calibrated machine
+### End-to-end measurements on platform A
 
 ![Verdict testbed](docs/assets/f11-verdict-bed.svg)
 
@@ -213,7 +213,7 @@ about clusters past 128 ranks.
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
 | `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 291 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
-| `sim/` | Measurement-calibrated cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the target checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b gates passed** (4.1% median on C1; 1.9%/9.3%/8.0% on C2-C4, with C3 a same-corpus B fit and C4 the post-freeze A holdout); a world-8 drift probe fails and is not retuned. Tier-2 fails, so step-level extrapolation is banned. |
+| `sim/` | Cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the target checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b gates passed** (4.1% median on C1; 1.9%/9.3%/8.0% on C2-C4, with C3 a same-corpus B fit and C4 the post-freeze A holdout); a world-8 drift probe fails and is not retuned. Tier-2 fails, so step-level extrapolation is banned. |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
 | `tests/` | 291 tests, pure CPU (no NPU needed) | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |

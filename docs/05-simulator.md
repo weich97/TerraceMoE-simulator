@@ -1,6 +1,6 @@
 # The simulator: measured on one machine, ratio sensitivities for new machines
 
-`sim/` is a **measurement-calibrated** MoE-EP communication simulator: given a cluster spec
+`sim/` is an MoE-EP communication simulator: given a cluster spec
 (α, β, and group size for the fast/slow tiers) and a MoE geometry (E/N_g/k/M/H/sequence/
 micro-batch), it predicts one-hop and two-hop all-to-all communication time, and — only where
 the validation gates pass — evaluates sensitivity to explicitly supplied machine parameters.
@@ -96,7 +96,7 @@ which two-hop starts to win, q=3, T=4096):
 | Hypothetical fused target (0.012) | **1.49** |
 | Zero implementation overhead (upper bound) | 1.10 |
 
-One-sentence takeaway: in this calibrated sensitivity study, the implementation tier moves the
+One-sentence takeaway: in this sensitivity study, the implementation tier moves the
 breakeven from 3.98 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
 lands on either side is unresolved until its effective ratio and call costs are measured.
 
@@ -159,7 +159,7 @@ different footing:
 
 | Constant | Verdict | Evidence |
 |---|---|---|
-| β (asymptotic bandwidth) | **corroborated** | fitted independently per dataset: 117.8 GB/s on the calibrated machine, 111.0–130.3 on the second — spread narrower than either machine's own drift, and unchanged whether α is pinned or free |
+| β (asymptotic bandwidth) | **corroborated** | fitted independently per dataset: 117.8 GB/s on platform A, 111.0–130.3 on the second — spread narrower than either machine's own drift, and unchanged whether α is pinned or free |
 | α at worlds 8 / 16 / 128 | **corroborated** | direct measurements; every scale conclusion below 128 ranks is identical under all α treatments |
 | α at worlds 256 / 512 | **not supported** | only one corpus reaches them, and it is the corpus with 5× lower absolute bandwidth and 40% fit error vs 5–11% elsewhere — see the scale section above |
 | half-performance size `x_half` | **not identifiable** | trades off against α; moves 3–5× depending on whether α is pinned. Quote it only from a pinned-α fit |
@@ -218,7 +218,7 @@ error ran the flattering way: **an admissibility interval computed from a noisy
 corpus comes out too tight, and reads as a stronger result than the data supports.**
 
 The same sweeps disposed of an attempt that did not work. Two dense 13-size sweeps
-were taken on the calibrated machine specifically to re-fit x_half from its own data
+were taken on platform A specifically to re-fit x_half from its own data
 and retire the borrow. They could not, even at 12-sweep medians: the pinned-α fit
 lands at x_half above 500 KiB with β∞ at 153 GB/s, against an asymptote of 103 GB/s
 directly visible at the largest size in the same sweep. That is the α/x_half

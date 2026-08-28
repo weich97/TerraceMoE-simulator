@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Platform registry: every calibrated machine is one sample, none is the story.
+"""Platform registry: every measured machine is one sample, none is the story.
 
 The simulator's product is a **method** -- measure primitives, fit the cost model,
 pass the gates, then extrapolate -- and a machine is what you apply it to. Each
@@ -39,7 +39,7 @@ from .core import ClusterSpec, Level
 
 @dataclass
 class Platform:
-    """One calibrated machine, with the provenance that makes its numbers readable."""
+    """One measured machine, with the provenance that makes its numbers readable."""
     key: str
     label: str
     hierarchy_ratio: float | None   # fast/slow beta only when both were measured

@@ -105,7 +105,7 @@ across the three axes, same protocol, to satisfy step 5.
 ## The launch measurement: run, and what it found
 
 This section used to describe a measurement worth taking. It was taken on
-2026-08-26, on two nodes of the calibrated machine, and this is the result.
+2026-08-26, on two nodes of platform A, and this is the result.
 
 **What was run.** N back-to-back tiny collectives at fixed world with no
 synchronisation between them, one sync at the end, N from 1 to 256, payloads 256 B

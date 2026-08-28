@@ -225,7 +225,7 @@ def synthetic(ratio: float, name: str = "", R: int = 8,
     alpha table carries the warning above: alpha's shape is a machine property.
     """
     ap = ALPHA_PTS if alpha_like_measured else [(2, 0.05), (512, 0.05)]
-    # Same saturation shape as the calibrated machine: a synthetic cluster of the
+    # Same saturation shape as the measured machine: a synthetic cluster of the
     # same family has no reason to reach line rate on small messages either. Pass
     # x_half=0 for the older flat behaviour, and re-estimate it on any real machine.
     flat_b = saturating_beta(base_beta_gbps / ratio, x_half)
