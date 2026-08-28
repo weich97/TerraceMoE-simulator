@@ -166,9 +166,9 @@ ax.set_ylabel("one-hop time / two-hop time (>1 = two-hop faster)")
 _, _, flat_p95 = mc_band(1.03, CHAIN_SCENARIOS[2][1])
 hier_p5, _, _ = mc_band(8.0, CHAIN_SCENARIOS[0][1])
 ax.set_title("Calibration uncertainty propagation (400 Monte Carlo draws, band = [p5, p95]):\n"
-             "flat column, most favorable case p95=%.2f %s\n"
+             "ratio 1.03, zero-overhead p95=%.2f %s\n"
              "8x column, least favorable case p5=%.2f %s"
-             % (flat_p95, "≤1 (negative verdict robust)" if flat_p95 <= 1.0 else "!! >1",
+             % (flat_p95, "≤1" if flat_p95 <= 1.0 else "crosses 1 (no robust sign)",
                 hier_p5, ">1 (direction robust)" if hier_p5 > 1.0 else "!! <1"),
              fontsize=10)
 ax.legend(frameon=False, fontsize=9, loc="upper left")
@@ -314,7 +314,7 @@ _arm(ax, BFY8, VOIDS["BFY8"], "s", "#3A7D5C", "one-sided · butterfly 8-core (ho
 _arm(ax, OFF1, VOIDS["OFF1"], "^", "#5B8DB8", "one-sided · official alltoall form (one stream per peer)")
 _arm(ax, BFY1, VOIDS["BFY1"], "v", "#B35A5A", "one-sided · butterfly single-core (as-shipped block_dim=1)")
 best = max(b / a for i, (b, a) in enumerate(zip(BFY8, A2A)) if i not in VOIDS["BFY8"])
-ax.annotate("one-sided best = %.2f× a2a\n(criterion ≥1.15× on ≥2 tiers, preregistered)" % best,
+ax.annotate("one-sided best = %.2f× a2a\n(criterion ≥1.15× on ≥2 tiers, prespecified)" % best,
             xy=(MB[-1], BFY8[-1]), xytext=(11, 44), fontsize=9, color="#3A7D5C",
             arrowprops=dict(arrowstyle="->", color="#3A7D5C", lw=1))
 ax.set_xlabel("Payload per peer (MB, row-width-aligned convention)")
@@ -329,12 +329,8 @@ fig.tight_layout()
 fig.savefig(os.path.join(OUT, "f12-onesided.svg"), metadata={"Date": None}, bbox_inches="tight")
 plt.close(fig)
 
-# ------------------------------------------------------- F13 where the methods pay off
-from sim.platforms import ARCHETYPES, platform_map          # noqa: E402
-from sim.uncertainty import mc_band                          # noqa: E402
-
-rows = platform_map()
-bes = rows[0]["breakevens"]
+# ------------------------------------------------------- F13 ratio-only sensitivity map
+bes = {name: breakeven_ratio(chain) for name, chain in CHAIN_SCENARIOS}
 tier_names = list(bes)
 tier_colors = {tier_names[0]: "#B35A5A", tier_names[1]: "#5B8DB8",
                tier_names[2]: "#3A7D5C"}
@@ -356,34 +352,30 @@ for tier, col in tier_colors.items():
             bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
 ax.axvspan(0.9, min(bes.values()), color="#B35A5A", alpha=0.07)
 
-ys = list(range(len(ARCHETYPES)))
-for y, a in zip(ys, ARCHETYPES):
-    n_yes = sum(1 for t in tier_names if a.ratio_nominal >= bes[t])
-    col = "#3A7D5C" if n_yes == 3 else ("#C4823B" if n_yes else "#B35A5A")
-    ax.plot([0.95, a.ratio_nominal], [y, y], color=col, lw=1.1, alpha=0.35, zorder=1)
-    ax.scatter([a.ratio_nominal], [y], s=130, color=col, zorder=3,
-               edgecolor="white", linewidth=1.2)
-    ax.text(a.ratio_nominal * 1.14, y, "%s  (%d/3 tiers)" % (a.label, n_yes),
+scenario_ratios = [1.03, 2.0, 4.0, 9.0, 18.0]
+scenario_labels = ["platform A measured ratio", "synthetic scenario",
+                   "synthetic scenario", "synthetic scenario", "synthetic scenario"]
+ys = list(range(len(scenario_ratios)))
+for y, (ratio, label) in enumerate(zip(scenario_ratios, scenario_labels)):
+    measured = y == 0
+    ax.scatter([ratio], [y], s=120, marker="D" if measured else "o",
+               facecolor="#333" if measured else "white", edgecolor="#333",
+               linewidth=1.4, zorder=3)
+    ax.text(ratio * 1.12, y, "%s (ratio %g)" % (label, ratio),
             va="center", fontsize=8.6, color="#222", zorder=5,
             bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
 
-for key, marker, lbl in (("A", "D", "platform A, measured"),):
-    ax.scatter([1.03], [-0.85], s=95, marker=marker, color="#333", zorder=4)
-    ax.text(1.03 * 1.14, -0.85, "%s (ratio 1.03)" % lbl, va="center",
-            fontsize=8.6, color="#333", zorder=5,
-            bbox=dict(facecolor="white", edgecolor="none", pad=1.2, alpha=0.88))
-
 ax.set_yticks([])
-ax.set_ylim(-1.6, 5.7)
+ax.set_ylim(-0.8, 5.7)
 ax.set_xscale("log")
 ax.set_xlim(0.95, 42)
 ax.set_xticks([1, 1.5, 2, 3, 5, 8, 12, 18, 30])
 ax.set_xticklabels(["1", "1.5", "2", "3", "5", "8", "12", "18", "30"], fontsize=8.5)
 ax.minorticks_off()
 ax.set_xlabel("Hierarchy ratio: fast-side bandwidth / slow-side bandwidth (log scale)")
-ax.set_title("Where hierarchical dispatch pays off. Vertical lines are the breakeven "
-             "ratio for each\nimplementation tier, so the arrival chain moves the "
-             "threshold as much as the fabric does.", fontsize=10.5)
+ax.set_title("Ratio-only sensitivity at the reference geometry (not platform predictions).\n"
+             "Vertical lines are communication-call breakevens; only ratio 1.03 is measured.",
+             fontsize=10.5)
 ax.spines[["top", "right", "left"]].set_visible(False)
 ax.grid(axis="x", alpha=0.25, linewidth=0.6)
 ax.set_axisbelow(True)

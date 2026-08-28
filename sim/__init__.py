@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""terrace-sim: an MoE-EP communication simulator calibrated from real measurements -- one machine's data, many machines' answers.
+"""terrace-sim: an MoE-EP communication model calibrated from real measurements.
 
 ## Why this exists (the 2026-08-24 pivot)
 
@@ -12,7 +12,7 @@ into a simulator with **swappable cluster parameters**.
 
 ## Methodology (this is the core of the deliverable, not the code)
 
-    measure -> calibrate -> validate -> extrapolate
+    measure -> calibrate -> validate -> sensitivity analysis
 
 1. **Measure**: microbenchmarks measure only "primitives" -- the alpha(world) curve, the
    beta(size) curve (split by domain: intra-node / cross-node / cross-supernode), and the
@@ -22,11 +22,11 @@ into a simulator with **swappable cluster parameters**.
 3. **Validate (the step most simulation work skips)**: the simulator must first reproduce
    our own end-to-end ground truth -- the G values of the control testbed's 6 geometries
    (sign and magnitude, from +2.8% to -21.8%). Microbenchmark calibration and end-to-end
-   validation are two mutually independent datasets; preregistered tolerances are in
-   sim/validate.py, **frozen before the run**.
-4. **Extrapolate**: only after validation passes may cluster parameters (hierarchy ratio,
-   alpha curve, R, incast) be swapped to draw conclusions. Extrapolated results are always
-   labeled "simulation" and listed strictly apart from measurements.
+   validation are two mutually independent datasets; prespecified tolerances are in
+   sim/validate.py, **frozen before the run** (with no public timestamped registration).
+4. **Sensitivity analysis**: only after validation passes may cluster parameters
+   (hierarchy ratio, alpha curve, R, incast) be varied. Results are always labeled
+   "simulation" and are not target-platform verdicts without target-local calibration.
 
 ## Honesty boundary
 

@@ -383,17 +383,17 @@ z
     </g>
    </g>
    <g id="patch_5">
-    <path d="M 412.698331 165.203936 
-Q 494.574315 148.954728 575.353654 132.923161 
+    <path d="M 411.036447 165.207998 
+Q 493.741209 148.955277 575.348919 132.918143 
 " style="fill: none; stroke: #3a7d5c; stroke-linecap: round"/>
-    <path d="M 571.472126 131.858388 
-L 575.353654 132.923161 
-L 572.172919 135.389519 
+    <path d="M 571.469393 131.846101 
+L 575.348919 132.918143 
+L 572.163569 135.378539 
 " style="fill: none; stroke: #3a7d5c; stroke-linecap: round"/>
    </g>
    <g id="text_14">
     <text style="font-size: 9px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif; fill: #3a7d5c" transform="translate(265.953252 174.820299)">one-sided best = 0.68× a2a</text>
-    <text style="font-size: 9px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif; fill: #3a7d5c" transform="translate(265.953252 184.615709)">(criterion ≥1.15× on ≥2 tiers, preregistered)</text>
+    <text style="font-size: 9px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif; fill: #3a7d5c" transform="translate(265.953252 184.615709)">(criterion ≥1.15× on ≥2 tiers, prespecified)</text>
    </g>
    <g id="text_15">
     <text style="font-size: 10.5px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(178.748008 15.637222)">One-sided (aclshmem put) vs collective a2a, intra-node 8 dies:</text>

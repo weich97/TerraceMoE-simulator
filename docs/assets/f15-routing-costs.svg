@@ -319,7 +319,7 @@ L 281.767953 264.906523
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="text_7">
-    <text style="font-size: 8.5px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #bb3333" x="285.742086" y="106.556107" transform="rotate(-0 285.742086 106.556107)">preregistered no-loss threshold 0.1</text>
+    <text style="font-size: 8.5px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #bb3333" x="285.742086" y="106.556107" transform="rotate(-0 285.742086 106.556107)">prespecified no-loss threshold 0.1</text>
    </g>
    <g id="text_8">
     <text style="font-size: 10px; font-family: 'Helvetica Neue', 'Arial', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(76.980363 61.852793)">Quality cost: T-Route pays 38% of what</text>

@@ -15,8 +15,8 @@ much. It is the form of the answer someone deciding whether to adopt actually ne
 
 1. **A hierarchy exists, past the implementation-adjusted breakeven.**
    The byte account alone gives r_be = (1−1/R)·q/(q−1) — 1.31 at R=8, q=3. But the
-   arrival chain moves the real threshold: 3.87 with a PyTorch op chain, 1.45 with
-   a fused kernel, 1.07 at zero overhead. So the honest threshold depends on the
+   arrival chain moves the real threshold: 3.98 with a PyTorch op chain, 1.49 for
+   the hypothetical fused target, 1.10 at zero overhead. So the threshold depends on the
    software as much as the fabric, and this check reports it against the tier you
    declare.
 
@@ -232,9 +232,9 @@ def launch_sensitivity(geom, chain_us_per_row: float,
     written before the cost was measured; it now has a measured point in it.
 
     At the measured host exposure of HOST_EXPOSURE_MS = 0.130, the breakeven on
-    the reference geometry moves from 3.87 to 4.04 -- under 5%, because the
+    the reference geometry moves from 3.98 to 4.15 -- under 5%, because the
     arrival chain dominates everything else on this machine. Remove the chain and
-    the same 0.130 moves the breakeven from 1.07 to 1.24, which is 16%. So the
+    the same 0.130 moves the breakeven from 1.10 to 1.27, which is 16%. So the
     ordering is unchanged and worth stating plainly: fuse the chain first, and
     only then does host exposure become the next thing worth paying for.
 

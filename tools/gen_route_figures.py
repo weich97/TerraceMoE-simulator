@@ -69,7 +69,7 @@ MODES = [
      "fan-out bounded: at most M = 2 groups\nsizes still vary, here 3 rows and 1 row"),
     ("(c) equal quota only (MoGE)",
      [(0, 1), (1, 2), (2, 0), (3, 3)],
-     "every group gets exactly k/N_g = 1 row\nconstant size, but fan-out is all N_g groups"),
+     "each token contributes k/N_g = 1 row/group\nfixed quota; aggregate peer sizes remain dynamic"),
     ("(d) T-Route: both constraints",
      [(1, 0), (1, 2), (3, 1), (3, 3)],
      "fan-out = M = 2, and exactly k/M = 2 rows each\nbounded and constant: a compile-time envelope"),
@@ -143,7 +143,7 @@ hi = [QUALITY[k][2] - QUALITY[k][0] for k in MODE_KEYS]
 ax.bar(xs, ys, width=0.55, color=[COLOR[k] for k in MODE_KEYS], edgecolor="white")
 ax.errorbar(xs, ys, yerr=[lo, hi], fmt="none", ecolor="#333", capsize=4, lw=1.2)
 ax.axhline(0.1, color="#B33", ls="--", lw=1.2)
-ax.text(2.45, 0.093, "preregistered no-loss threshold 0.1", color="#B33",
+ax.text(2.45, 0.093, "prespecified no-loss threshold 0.1", color="#B33",
         ha="right", va="top", fontsize=8.5)
 ax.set_yscale("log")
 ax.set_ylim(0.0015, 0.16)

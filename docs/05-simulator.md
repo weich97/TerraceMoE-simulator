@@ -1,14 +1,16 @@
-# The simulator: measured on one machine, answers for many clusters
+# The simulator: measured on one machine, ratio sensitivities for new machines
 
 `sim/` is a **measurement-calibrated** MoE-EP communication simulator: given a cluster spec
 (α, β, and group size for the fast/slow tiers) and a MoE geometry (E/N_g/k/M/H/sequence/
 micro-batch), it predicts one-hop and two-hop all-to-all communication time, and — only where
-the validation gates pass — extrapolates the comparison to clusters you do not have.
+the validation gates pass — evaluates sensitivity to explicitly supplied machine parameters.
+It does not turn nominal link rates into a target-platform verdict: a new target must measure
+the five inputs used by the model and pass the communication-level gate locally.
 
 ## Methodology (this is the main deliverable; the code is just its carrier)
 
 ```
-measure  ->  calibrate  ->  validate  ->  extrapolate
+measure  ->  calibrate  ->  validate  ->  sensitivity analysis
 ```
 
 1. **Measure**: microbenchmarks measure primitives only — the α(world) curve, β (aligned-payload
@@ -20,15 +22,17 @@ measure  ->  calibrate  ->  validate  ->  extrapolate
    Three gate tiers, thresholds fixed ahead of the targets:
    - **Tier-1 (communication micro level)**: against directly measured one-hop/two-hop times on
      the same machine — median relative error ≤20%, max ≤35%, crossover position reproduced.
-     **Current: pass** (2.8% / 24.5% / 4096–8192).
+   **Current: pass** (4.1% / 24.5% / 4096–8192).
    - **Tier-1b (cross-corpus, `sim/validate_sweep.py`)**: the same model against 64 distilled
      targets from a *different* benchmark family on **two machines** — the calibrated one, and
-     a second one whose constants are all re-fitted so only the model form is shared. Gate:
+     a second one whose α, flat β, and x_half are fitted from C3 while the level split
+     and arrival-chain assumptions remain inherited. Gate:
      median relative error ≤12%, at most 1 in 5 targets over 35%, median signed error within
      ±8%. **Current: pass** on all three corpora (machine A 1.9% median over 6 targets;
      machine B 9.3% over 44, bias −1.1%; machine A at world 16, collected 2026-08-26 after
-     the constants were frozen, 8.0% over 14, bias −2.0%). The first two are a regression
-     guard written after the calibration; the third had nothing fitted to it. A fourth
+     the constants were frozen, 8.0% over 14, bias −2.0%). The first two are same-corpus
+     fit/consistency guards written after calibration, not out-of-sample transfer tests; the
+     third is the post-freeze holdout. A fourth
      corpus, machine A at world 8, **fails** at 15.1% and −9.1%; it is reported as a drift
      probe on α(8) and held out of the conjunction, with the reasoning below.
    - **Tier-2 (end-to-end step level)**: against measured G on 7 training geometries
@@ -39,8 +43,9 @@ measure  ->  calibrate  ->  validate  ->  extrapolate
      This is a known open problem, not something parameter tuning can fix; the test suite pins
      `test_tier2_step_gate_currently_fails_documented` — **the day this gate suddenly turns
      green, a human must check whether the problem was actually solved or the gate was loosened**.
-4. **Extrapolate**: only tiers that passed their gate may extrapolate, and every output is
-   labeled "simulated".
+4. **Sensitivity analysis**: only tiers that passed their gate may be varied, and every output
+   is labeled "simulated". A target-platform conclusion additionally requires target-local
+   measurement and validation.
 
 ## Calibration highlights (details in the `sim/calibrate.py` comments)
 
@@ -61,19 +66,18 @@ One-hop time / two-hop time (>1 = two-hop faster), 16 groups × R=8, k=6, T=4096
 
 | Implementation tier \ hierarchy ratio | 1.03 (flat) | 3.2 | 8 | 15.7 |
 |---|---|---|---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | 0.40 | 0.88 | 1.55 | 2.12 |
-| Fused kernel (est. 0.012) | 0.82 | 1.55 | 2.29 | 2.76 |
-| Zero implementation overhead (upper bound) | 0.98 | 1.76 | 2.47 | 2.89 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | 0.40 | 0.87 | 1.51 | 2.04 |
+| Hypothetical fused target (0.012) | 0.81 | 1.51 | 2.19 | 2.62 |
+| Zero implementation overhead (upper bound) | 0.97 | 1.70 | 2.36 | 2.74 |
 
 (q=3; for q=2/q=6 and all six hierarchy-ratio tiers, run `python -m sim.sweep` to compute them
 live — the table tracks the calibration; the doc stores only a snapshot.)
 
 Three consistency anchors:
 
-- The flat column is ≤1 — reproducing our measured negative verdict on the flat supernode
-  (internal consistency);
-- Columns at hierarchy ratio ≥3.2 are >1 — directionally consistent with public work
-  (DeepSeek-V3 node-limited, TeleChat3-MoE +15%, Pangu Ultra MoE) (external consistency);
+- The flat column is ≤1 — consistent with our measured negative result on platform A;
+- the higher-ratio columns are synthetic scenarios, not measurements or predictions for named
+  platforms;
 - The implementation tier's impact is on the same order as the hierarchy ratio's —
   **"fix the implementation first, then talk topology" holds on hierarchical machines too**.
 
@@ -88,13 +92,13 @@ which two-hop starts to win, q=3, T=4096):
 
 | Implementation tier | breakeven hierarchy ratio |
 |---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | **3.87** |
-| Fused kernel (est. 0.012) | **1.45** |
-| Zero implementation overhead (upper bound) | 1.07 |
+| PyTorch arrival chain (measured 0.0875 µs/row) | **3.98** |
+| Hypothetical fused target (0.012) | **1.49** |
+| Zero implementation overhead (upper bound) | 1.10 |
 
-One-sentence takeaway: **the implementation tier pulls breakeven from 3.9 down to 1.5** — on
-common hierarchical machines like NVLink/IB (≈3.2), whether hierarchical communication is worth
-doing depends on how well your arrival chain is written, not on the topology.
+One-sentence takeaway: in this calibrated sensitivity study, the implementation tier moves the
+breakeven from 3.98 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
+lands on either side is unresolved until its effective ratio and call costs are measured.
 
 ### Uncertainty bands: is the conclusion stable against calibration error?
 
@@ -105,15 +109,15 @@ run-to-run drift ±9~20%). 400 Monte Carlo draws propagate that spread into the 
 (provenance noted item by item, see `sim/uncertainty.py`; fixed seed, reruns match bit for bit).
 Two robustness anchors:
 
-- Flat column, most favorable case (zero implementation overhead): p95 = **1.04** — just above
+- Flat column, most favorable case (zero implementation overhead): p95 = **1.03** — just above
   1. Read it precisely: once bandwidth saturation is modelled, the *byte account alone* on a
   flat fabric is close to neutral, so what actually makes two-hop lose there is the
   implementation overhead that this tier deliberately sets to zero. The measured verdict on the
   flat machine is unchanged (docs/03), and it is an implementation verdict, not a bytes verdict.
   Under the fused tier — the best any real implementation has reached — the flat column stays
   below 1;
-- 8× column, least favorable case (PyTorch chain): p5 = **1.45 > 1** — on hierarchical machines,
-  the direction "two-hop wins" is robust to calibration error.
+- 8× synthetic scenario, least favorable case (PyTorch chain): p5 = **1.41 > 1**. This makes the
+  sign robust inside the model's uncertainty calculation, not on an unmeasured target machine.
 
 ### Scale effects: where does the large-cluster advantage come from?
 
@@ -142,7 +146,7 @@ and must be re-measured, not inherited.
 Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.geometry_grid`)
 is consistent with that mechanism, and carries the same caveat wherever it reaches past 128.
 Ranking the three axes by how far they actually move breakeven (fused tier): **implementation
-tier largest** (3.87 → 1.07, Δ≈2.8) > scale axis (Δ≤1.9, and only the ≤128 part of it is
+tier largest** (3.98 → 1.10, Δ≈2.9) > scale axis (Δ≤1.9, and only the ≤128 part of it is
 trustworthy) > geometry axis ((k,M) moves up to 0.53 at fixed world; under the PyTorch tier the
 geometry axis widens to 1.62, but the ordering stands).
 
@@ -170,7 +174,8 @@ borrow-the-shape-never-the-level discipline the α curve already follows). The i
 level keeps a flat β, because its value is physics-endorsed (link aggregation,
 0.2% from measurement) and the sweep corpora never isolate it.
 
-The result: **Tier-1 median error drops from 8.1% to 2.8%** (worst 12.5% → 24.5%, still
+After correcting Hop A's local-group fraction from M/N_g to 1/N_g, the current result is
+**Tier-1 median error 4.1%** (worst 24.5%, still
 inside the 35% gate), and the entire bootstrap interval of x_half passes it (30 KiB → 2.5%,
 87 KiB → 5.0%). Tier-1b then confirms the model on 64 targets from a different benchmark
 family across two machines. The
@@ -193,7 +198,7 @@ at 512), but that is the low-confidence dataset, so it is recorded as unconfirme
 and stays out of the model.
 
 One caveat that survives: the crossover position moved to the upper edge of the
-preregistered window, so an x_half much above the fitted interval would fail the
+prespecified window, so an x_half much above the fitted interval would fail the
 gate. `tests/test_sim.py` holds the breakeven snapshot and the anchors so any
 further drift shows up immediately.
 
@@ -228,8 +233,7 @@ measured the same day by the independent call-count scan. Setting α(8) to the
 measured value clears the corpus (9.3%, −0.8%) and keeps Tier-1 green at 4.9%
 against its 20% gate. **The constant is not changed**: both readings are direct
 measurements of the same machine 15% apart, which is inside the documented 20%
-drift, and the choice moves the breakeven ratio by under 2.1% (3.87 → 3.89 on the
-measured chain, 1.45 → 1.47 fused). Retuning a constant to green a newly added
+drift, and the choice moves the breakeven ratio by under 2.1%. Retuning a constant to green a newly added
 corpus, at the cost of the one gate that was passed blind, is the failure mode the
 tiering exists to prevent. The corpus ships red, with the cause, held out of the
 Tier-1b conjunction because it probes one constant's drift rather than the model

@@ -21,7 +21,9 @@ from .validate_micro import validate_micro
 
 CHAIN_SCENARIOS = [
     ("PyTorch chain (measured)", CHAIN_US_PER_ROW),   # single provenance: the calibration layer
-    ("fused kernel (est.)", 0.012),
+    # A design target used for sensitivity analysis.  No fused end-to-end kernel
+    # has been measured at this cost, so the label must not read like a result.
+    ("hypothetical fused target", 0.012),
     ("zero implementation overhead (upper bound)", 0.0),
 ]
 
@@ -52,8 +54,8 @@ def main() -> None:
     print("Geometry: 16 groups x R=8, k=6, T=4096 tok/rank (control-testbed operating point)")
     print("=" * 74)
     ratios = [1.03, 2.0, 3.2, 4.5, 8.0, 15.7]
-    labels = ["flat supernode", "2x", "NVLink/IB 3.2x", "cross-supernode 4.5x",
-              "HCCS/RoCE 8x", "CM intra/inter 15.7x"]
+    labels = ["ratio 1.03", "ratio 2", "ratio 3.2", "ratio 4.5",
+              "ratio 8", "ratio 15.7"]
     for chain_name, chain in CHAIN_SCENARIOS:
         print("\n-- implementation tier: %s (%.4f us/row) --" % (chain_name, chain))
         print("%-16s" % "q \\ ratio", "".join("%12s" % l[:10] for l in labels))
@@ -66,9 +68,11 @@ def main() -> None:
     print()
     print("How to read:")
     print("  · The flat column (1.03) stays <=1 at every implementation tier -- matches our measured negative verdict (internal consistency).")
-    print("  · Columns with hierarchy ratio >=3.2 are all >1 -- same direction as the")
-    print("    positive results in public work (DeepSeek/TeleChat3/Pangu) (external consistency).")
-    print("  · The implementation tier matters as much as the hierarchy ratio -- 'fix the implementation before debating topology' holds on hierarchical machines too.")
+    print("  · Columns with hierarchy ratio >=3.2 are all >1 inside the calibrated")
+    print("    sensitivity model; the ratios are synthetic rather than target measurements.")
+    print("  · The implementation tier changes the magnitude materially.  Because the")
+    print("    fused tier is hypothetical and the high-ratio columns are sensitivity")
+    print("    scenarios, none of these cells is a target-platform deployment verdict.")
 
 
 if __name__ == "__main__":

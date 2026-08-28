@@ -17,7 +17,9 @@ the accuracy the gate was set to demand and no better.
 ## What is being tested, precisely
 
 Machine A is the calibrated machine. Machine B is a second machine of the same
-family, and **every constant is re-fitted for it; only the model form is shared**.
+family. Communication-curve constants identifiable from that corpus are fitted for it;
+the level split and implementation-side constants remain assumptions, so this is a
+same-corpus fit/consistency check rather than a full transfer test.
 Passing on B is the real claim -- not that our constants transfer (they do not, and
 alpha least of all), but that the shape of the cost model does, so someone else can
 re-calibrate on their own hardware and expect it to work.
@@ -111,7 +113,7 @@ TARGETS_B = [
 # calibrate.py was frozen, on a world machine A had never been validated at (its
 # other corpus is world 128 only), with the same benchmark and the same aligned
 # convention. This is the closest thing here to a blind test: the gate thresholds
-# below were preregistered, the constants were fixed months earlier, and this corpus
+# below were prespecified, the constants were fixed months earlier, and this corpus
 # did not exist when either was written. It is scored on its own rather than pooled
 # into TARGETS_A, so the original six points keep working as the regression guard
 # they were written to be.
@@ -149,8 +151,8 @@ TARGETS_C = [
 #
 # Both readings are direct measurements of the same machine, 15% apart, inside the
 # 20% run-to-run drift this file documents, so neither supersedes the other. Nothing
-# depends on the choice either way: the breakeven ratio moves from 3.87 to 3.89 on
-# the measured chain and 1.45 to 1.47 fused, under 2.1%.
+# depends on the choice either way: the corrected breakeven ratio moves only slightly
+# on the measured-chain and hypothetical-fused sensitivity tiers, under 2.1%.
 #
 # And decisively: the measurement cannot be adopted whole. The same scan, extended
 # to worlds 2 and 4, reproduces the table there to within 3% -- so the instrument is

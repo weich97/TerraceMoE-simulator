@@ -79,8 +79,8 @@ BETA_FLAT = 117.8    # 128-card full-fabric a2a: asymptotic bandwidth, fitted on
 #   (BETA_FLAT) is measured here. Sensitivity is reassuring rather than alarming: the
 #   whole bootstrap interval passes Tier-1 (30 KiB -> 2.5% median, 87 KiB -> 5.0%).
 #   **Estimated before looking at the gate**, then checked against it: Tier-1 median
-#   error improves from 8.1% to 2.8% and the gate still passes. Note the crossover
-#   position moves to the upper edge of the preregistered window, so an x_half much
+#   current corrected-Hop-A error is 4.1% and the gate still passes. Note the crossover
+#   position moves to the upper edge of the prespecified window, so an x_half much
 #   above this interval would fail the gate -- see tests/test_sim.py.
 #   Fitting caveat (sim/fit.py): alpha and x_half trade off, so this number is only
 #   meaningful with alpha pinned to its direct measurements, which is how it was fitted.
@@ -115,7 +115,7 @@ SPLITS_SYNC_MS = 0.044     # host-side retrieval of splits for variable-length a
 CHAIN_US_PER_ROW = 2.15 * 1000.0 / 24576.0   # arrival chain, PyTorch op chain, per row
                                              # (measured 2.15 ms/call @ 24576 rows)
 # This is the constant everything hinges on -- it alone moves the breakeven ratio
-# from 1.07 to 3.87 -- and until 2026-08-26 it rested on that single point. It was
+# from 1.10 to 3.98 -- and until 2026-08-26 it rested on that single point. It was
 # then swept properly: nine row counts from 1024 to 65536, on each of two nodes,
 # thirty iterations each, op-level and single-card (bench/machine/dispatch_oplevel).
 #
@@ -126,7 +126,7 @@ CHAIN_US_PER_ROW = 2.15 * 1000.0 / 24576.0   # arrival chain, PyTorch op chain, 
 # **The level re-measures 13% higher**: 0.0987 us/row today against the 0.0875 here,
 # and 2.50 ms at the original 24576-row point against 2.15. Inside the documented
 # 20% drift, so the constant does not move -- but note which way it would move if it
-# did. Adopting 0.0987 raises the breakeven from 3.87 to 4.23, against the method
+# did. Adopting 0.0987 raises the corrected breakeven from 3.98 to 4.34, against the method
 # this repository is proposing. Recorded because the new evidence is the stronger of
 # the two, eighteen measurements against one, and a future recalibration should
 # probably take it.
@@ -191,7 +191,7 @@ SECOND_BETA_FLAT = 111.9
 
 
 def second_machine(x_half: float = None) -> ClusterSpec:
-    """A second machine of the same family; every constant re-fitted, form unchanged.
+    """A second machine of the same family; identifiable curve constants fitted, form unchanged.
 
     x_half is overridable for the same reason as in flat_supernode: it is the one
     shape both machines share, so a sweep over it has to move both or it is not

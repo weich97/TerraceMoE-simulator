@@ -23,7 +23,7 @@ the failures).
 
 ## Discipline
 
-  - Fitting uses flag only (matching the preregistered split of sim/validate.py);
+  - Fitting uses flag only (matching the prespecified split of sim/validate.py);
     holdout points never participate.
   - Report the whole family set, pick no winner: even if some family passes retrodiction,
     that is only "model selection on seven points" -- **the Tier-2 gate stays red**, and
@@ -56,7 +56,7 @@ from dataclasses import dataclass
 from .core import step_delta
 from .validate import HOLDOUTS
 
-NEG_NAMES = {"tok2x", "tok4x", "k8m4", "n8", "n4"}   # the 4 preregistered sign points + the later n4;
+NEG_NAMES = {"tok2x", "tok4x", "k8m4", "n8", "n4"}   # the 4 prespecified sign points + the later n4;
 # k8m2 (G=0.9935, n=1, within noise of 1) is not counted for direction -- matches
 # the sign convention in validate.py
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Validation gate: the simulator must first reproduce our own end-to-end ground truth before it earns the right to extrapolate.
 
-## Preregistration (2026-08-24, written before the first run; no after-the-fact edits)
+## Prespecification (2026-08-24, written before the first run; no public timestamped registration)
 
 **Calibration point (1)**: `flag`. The combine-side implementation delta (the on arm's
 combine is actually faster; mechanism not fully explained, internal measurement
@@ -10,13 +10,13 @@ records/internal measurement records) cannot be derived from first principles; a
 for all remaining holdout geometries**.
 
 **Holdout validation points (never used in any fit)**: tok2x / tok4x / k8m2 / k8m4 / n8
-(the 5 preregistered) + n4 (a third scale-axis point added after preregistration; the
+(the 5 prespecified) + n4 (a third scale-axis point added after prespecification; the
 gate's threshold numbers stay put, the denominator honestly counts 6).
 
-**Gate (all must hold to pass; thresholds are the preregistered originals, denominators labeled as they now stand)**:
+**Gate (all must hold to pass; thresholds are the prespecified originals, denominators labeled as they now stand)**:
   1. G predictions on holdout points: mean absolute error MAE ≤ 0.025 (over 6 points after n4 joined);
-  2. at least 4 points within ±0.035 (preregistered as 4/5; the denominator is now 6);
-  3. all four preregistered sign points (tok2x/tok4x/k8m4/n8) in the right direction (G_pred < 1).
+  2. at least 4 points within ±0.035 (prespecified as 4/5; the denominator is now 6);
+  3. all four prespecified sign points (tok2x/tok4x/k8m4/n8) in the right direction (G_pred < 1).
 
 No gate pass, no extrapolation -- the sweep module checks this gate at runtime.
 

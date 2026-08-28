@@ -13,12 +13,11 @@ registry is what makes the coverage visible -- including its gaps.
 
 ## Coverage today
 
-The two samples on file sit at essentially the same point of the axis that matters
-(hierarchy ratio ~1.0). That is a real limitation of the sample set, not of the
-method: nothing here has been calibrated against a machine where the fast side is
-several times the slow side, which is precisely the regime the extrapolation is
-about. Reading the table as "the method works" is fair; reading it as "hierarchical
-clusters are covered" is not.
+Only platform A has a measured hierarchy ratio, 1.03.  Platform B contributes a
+same-corpus fit/consistency check after machine-specific refitting, but its corpus
+does not separate the fast and slow levels, so its hierarchy ratio is unresolved.
+Nothing here has been calibrated against a machine where the fast side is several
+times the slow side, which is precisely the regime the sensitivity study is about.
 
 Wanted, in rough order of what each would buy:
 
@@ -43,7 +42,7 @@ class Platform:
     """One calibrated machine, with the provenance that makes its numbers readable."""
     key: str
     label: str
-    hierarchy_ratio: float          # fast-side beta / slow-side beta, as measured
+    hierarchy_ratio: float | None   # fast/slow beta only when both were measured
     alpha_pts: list
     beta_inf: float
     x_half: float
@@ -85,34 +84,29 @@ PLATFORMS = {
               "end of the ratio axis; it settles nothing about hierarchical machines."),
     "B": Platform(
         key="B", label="platform B (second machine, re-fitted)",
-        hierarchy_ratio=1.0,
+        hierarchy_ratio=None,
         alpha_pts=SECOND_ALPHA_PTS, beta_inf=SECOND_BETA_FLAT,
         x_half=X_HALF_FLAT, beta_fast=0.0, cross_node_ratio=1.0,
-        provenance="every constant re-fitted from this machine's own corpora with "
-                   "the x_half shape pinned; nothing inherited from platform A",
+        provenance="alpha, flat beta, and x_half fitted on this machine's C3 corpus; "
+                   "the level split and arrival-chain assumptions are retained "
+                   "rather than independently measured",
         fit_median_err=0.093, n_targets=44,
-        notes="The transfer test: same model form, all constants re-fitted, 44 "
-              "independent targets at 9.3% median with no bias. This is what "
-              "licenses re-calibration on hardware we have never seen."),
+        notes="A fit/consistency check on the same C3 corpus used to fit the "
+              "machine-specific constants: 44 targets at 9.3% median error. It "
+              "shows that the same functional form remains usable after refitting; "
+              "it is not an out-of-sample transfer test and supplies no hierarchy "
+              "ratio. C4 on platform A is the post-freeze holdout."),
 }
 
 
 # ---------------------------------------------------------------------------
-# Archetypes: platforms we have NOT measured, specified from public/nominal
-# numbers so the method can be pointed at the machines people actually run on.
+# Ratio scenarios. Only 1.03 is measured (platform A); higher values are synthetic.
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class Archetype:
-    """A platform class described by its hierarchy ratio, not measured by us.
-
-    Ratios here are **nominal**: vendor link rates, not collective-communication
-    measurements. The repo's own rule is that effective ratios differ from nominal
-    by more than 2x often enough to flip a verdict, so these entries say where a
-    class of machine plausibly lands, and every one of them carries the same
-    instruction: measure your own ratio before believing the row.
-    """
+    """A ratio-only sensitivity point, not a target-platform prediction."""
     key: str
     label: str
     fast_side: str
@@ -122,25 +116,21 @@ class Archetype:
 
 
 ARCHETYPES = [
-    Archetype("flat-supernode", "Unified-fabric supernode",
-              "cross-node switching", "same fabric", 1.0,
-              "One switching domain, no fast side to exploit. Platform A is one of "
-              "these, measured at 1.03."),
-    Archetype("pcie-ib", "PCIe-attached accelerators + InfiniBand",
-              "PCIe Gen5 x16 (~60 GB/s)", "IB NDR (~25 GB/s)", 2.4,
-              "The narrowest hierarchy in common use; the fast side is barely fast."),
-    Archetype("hccs-roce", "Intra-server HCCS + cross-server RoCE",
-              "HCCS (~200 GB/s)", "RoCE (~25 GB/s)", 8.0,
-              "The configuration TeleChat3-MoE reports +15% throughput on at EP=16."),
-    Archetype("nvlink-ib", "8-GPU NVLink node + InfiniBand",
-              "NVLink (~450 GB/s/GPU)", "IB NDR (~50 GB/s)", 9.0,
-              "The mainstream training node. DeepSeek-V3's node-limited routing plus "
-              "IB-to-NVLink forwarding is this family."),
-    Archetype("rack-domain", "Rack-scale NVLink/UB domain + cross-rack fabric",
-              "in-rack domain (~900 GB/s)", "cross-rack (~50 GB/s)", 18.0,
-              "GB200 NVL72 and CloudMatrix-class racks. Largest ratio in production, "
-              "and the domain is big enough that EP may fit inside it -- in which "
-              "case the cross-domain hop disappears instead of being optimised."),
+    Archetype("measured-a", "Platform A measured ratio",
+              "measured fast side", "measured slow side", 1.03,
+              "The only row whose hierarchy ratio is measured."),
+    Archetype("ratio-2", "Synthetic ratio scenario",
+              "synthetic", "synthetic", 2.0,
+              "Sensitivity point; not assigned to a named platform."),
+    Archetype("ratio-4", "Synthetic ratio scenario",
+              "synthetic", "synthetic", 4.0,
+              "Sensitivity point; not assigned to a named platform."),
+    Archetype("ratio-9", "Synthetic ratio scenario",
+              "synthetic", "synthetic", 9.0,
+              "Sensitivity point; not assigned to a named platform."),
+    Archetype("ratio-18", "Synthetic ratio scenario",
+              "synthetic", "synthetic", 18.0,
+              "Sensitivity point; not assigned to a named platform."),
 ]
 
 
@@ -150,11 +140,10 @@ def verdict(ratio: float, breakevens: dict) -> dict:
 
 
 def platform_map(q: int = 3, tok: int = 4096) -> list:
-    """The deliverable: for each platform class, which tiers make two-hop worth it.
+    """For each ratio-only scenario, report which tiers cross their breakeven.
 
-    Returns one row per archetype with the verdict per implementation tier. The
-    tiers are what the arrival chain costs, so the table's real message is that
-    implementation quality decides as much as topology does over most of the axis.
+    Only the 1.03 ratio is measured. The remaining rows are synthetic sensitivity
+    points and must not be presented as target-platform verdicts.
     """
     from .sweep import CHAIN_SCENARIOS
     from .uncertainty import breakeven_ratio
@@ -176,8 +165,10 @@ def get(key: str) -> Platform:
 
 def coverage() -> dict:
     """Where the samples sit on the axis that decides two-hop's value."""
-    ratios = sorted(p.hierarchy_ratio for p in PLATFORMS.values())
+    ratios = sorted(p.hierarchy_ratio for p in PLATFORMS.values()
+                    if p.hierarchy_ratio is not None)
     return {"n_platforms": len(PLATFORMS),
+            "n_ratio_measured": len(ratios),
             "ratio_min": ratios[0], "ratio_max": ratios[-1],
             "spans_hierarchical": ratios[-1] >= 1.5,
             "targets_total": sum(p.n_targets for p in PLATFORMS.values())}
@@ -189,23 +180,25 @@ def main() -> None:
           ("key", "platform", "ratio", "fit err", "targets"))
     for k in sorted(PLATFORMS):
         p = PLATFORMS[k]
-        print("%-4s %-42s %7.2f %8.1f%% %8d"
-              % (k, p.label[:42], p.hierarchy_ratio, p.fit_median_err * 100,
+        ratio = "%.2f" % p.hierarchy_ratio if p.hierarchy_ratio is not None else "unresolved"
+        print("%-4s %-42s %10s %8.1f%% %8d"
+              % (k, p.label[:42], ratio, p.fit_median_err * 100,
                  p.n_targets))
     c = coverage()
-    print("\n%d platforms, %d validation targets, hierarchy ratio spanned %.2f-%.2f"
-          % (c["n_platforms"], c["targets_total"], c["ratio_min"], c["ratio_max"]))
+    print("\n%d platforms, %d validation targets; ratio measured on %d platform(s): %.2f-%.2f"
+          % (c["n_platforms"], c["targets_total"], c["n_ratio_measured"],
+             c["ratio_min"], c["ratio_max"]))
     if not c["spans_hierarchical"]:
-        print("**No sample above ratio 1.5.** Every statement about hierarchical")
-        print("clusters is extrapolation from machines that are not hierarchical;")
-        print("that gap closes only by calibrating one, not by more of these.")
+        print("**No measured ratio above 1.5.** Every statement beyond 1.03 is a")
+        print("synthetic sensitivity; that gap closes only by calibrating a target")
+        print("in the hierarchical regime.")
 
     rows = platform_map()
     bes = rows[0]["breakevens"]
     print()
-    print("=== where the methods pay off (nominal ratios; measure your own) ===")
+    print("=== ratio-only sensitivity scenarios ===")
     tiers = list(bes)
-    print("%-44s %6s  %s" % ("platform class", "ratio",
+    print("%-44s %6s  %s" % ("scenario", "ratio",
                              "  ".join("%-22s" % t[:22] for t in tiers)))
     print("%-44s %6s  %s" % ("", "",
                              "  ".join("%-22s" % ("breakeven %.2f" % bes[t])
@@ -214,20 +207,18 @@ def main() -> None:
         a = r["archetype"]
         cells = "  ".join("%-22s" % ("yes" if r["verdict"][t] else "no")
                           for t in tiers)
-        print("%-44s %6.1f  %s" % (a.label[:44], a.ratio_nominal, cells))
+        print("%-44s %6.2f  %s" % (a.label[:44], a.ratio_nominal, cells))
     print()
-    print("Read the columns, not just the rows: over most of the axis the")
-    print("implementation tier decides as much as the topology does.")
+    print("Read the columns, not just the rows: these are ratio-only sensitivity")
+    print("scenarios, not deployment verdicts.")
     print()
-    print("T-Route's status is different and stronger. It is what makes the two-hop")
+    print("T-Route is evaluated separately. It is what makes the two-hop")
     print("shape expressible at all -- it bounds each token's cross-group fan-out at")
-    print("compile time and makes every cross-group message constant-size -- and it")
-    print("was **measured to be free**: quality-neutral (+0.0034 nats, 3.4% of the")
-    print("preregistered threshold, 24/24 paired deltas same sign), downstream-")
-    print("equivalent under TOST on two benchmarks, load-neutral, and step-time-")
-    print("neutral (G = 0.9976 over two runs). See docs/06. A constraint that buys a")
-    print("compile-time traffic envelope at no measurable cost is worth adopting on")
-    print("any machine in the 'yes' region, and costs nothing on the others.")
+    print("compile time and fixes the per-token quota for each selected group. Aggregate")
+    print("per-peer counts remain data-dependent, so a counts exchange or padding may")
+    print("still be required. The measured quality effect is small but nonzero")
+    print("(+0.0034 nats); downstream equivalence is reported with incomplete estimator")
+    print("provenance, and load/step-time evidence is thinner. See docs/06.")
 
 
 if __name__ == "__main__":

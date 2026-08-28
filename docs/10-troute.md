@@ -102,14 +102,15 @@ have to be measured separately, and here they disagree.
 ## Why adopt it separately from T-A2A
 
 T-A2A pays off only on machines above a hierarchy ratio threshold (see
-[docs/03](03-applicability.md) and the platform map in `sim/platforms.py`). T-Route
-is not conditional in the same way. It buys a compile-time traffic envelope, each
-token's cross-group fan-out bounded by M and every cross-group message a constant
-size, at no measurable cost on any of the four axes above. That is useful for
-capacity planning and for removing a variable-length exchange, on any machine.
+[docs/03](03-applicability.md) and the ratio-sensitivity map in `sim/platforms.py`). T-Route
+is not conditional in the same way. It bounds each token's cross-group fan-out by M
+and fixes the per-selected-group quota. Aggregate per-peer counts remain data-dependent,
+so this does not by itself remove a counts exchange, padding, or capacity management.
 
-Since it costs nothing measurable, adopting it is not a trade. It is also what makes
-the two-hop dispatch available later, if and when the machine justifies it.
+The measured validation-loss effect is small but nonzero (+0.0034 nats), and the
+released downstream-equivalence record is not independently reconstructible from all
+per-seed/checkpoint inputs. It is also what makes the two-hop dispatch expressible later,
+if and when target-local measurements justify it.
 
 ## Boundaries, unsoftened
 

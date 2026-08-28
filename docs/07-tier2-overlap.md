@@ -16,19 +16,19 @@ All figure numbers are produced live by `python -m sim.overlap`; the script is t
 
 | Family | Structure (Δ = predicted two-hop step delta) | Parameter (solved from flag) | Holdout MAE | within ±0.035 | negative-sign direction | Gate |
 |---|---|---|---|---|---|---|
-| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | 0.135 | 0/6 | 5/5 | fail |
-| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.149 | 0.150 | 0/6 | 0/5 | fail |
-| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 2.47 ms | 0.062 | 4/6 | 3/5 | fail |
-| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.12 | 0.136 | 0/6 | 0/5 | fail |
-| M4 | hiding ∝ compute: Δ = Δmodel − c·T_comp | c = 0.302 | **0.048** | 2/6 | **5/5** | fail |
-| M5 | exposure ∝ pipeline pressure: Δ = Δmodel·(1−λ/mbs) | λ = 1.149 | 0.087 | 2/6 | 2/5 | fail |
+| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | 0.140 | 0/6 | 5/5 | fail |
+| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.153 | 0.150 | 0/6 | 0/5 | fail |
+| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 2.51 ms | 0.060 | 4/6 | 3/5 | fail |
+| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.14 | 0.133 | 0/6 | 0/5 | fail |
+| M4 | hiding ∝ compute: Δ = Δmodel − c·T_comp | c = 0.299 | **0.045** | 2/6 | **5/5** | fail |
+| M5 | exposure ∝ pipeline pressure: Δ = Δmodel·(1−λ/mbs) | λ = 1.153 | 0.088 | 2/6 | 2/5 | fail |
 
-Gate = holdout MAE ≤ 0.025 AND ≥4/6 within ±0.035 AND every negative-sign point directionally correct — threshold numbers carried over from the Tier-2 preregistration; the denominator honestly counts the 6 holdout points that exist (n4 is a scale-axis point added after preregistration). Negative-sign points = the 4 preregistered ones (tok2x/tok4x/k8m4/n8) + n4; k8m2 (G=0.9935, within n=1 noise of 1) is excluded from the direction count.
+Gate = holdout MAE ≤ 0.025 AND ≥4/6 within ±0.035 AND every negative-sign point directionally correct — threshold numbers carried over from the Tier-2 prespecification (no public timestamped registration); the denominator honestly counts the 6 holdout points that exist (n4 is a scale-axis point added later). Negative-sign points = the 4 prespecified ones (tok2x/tok4x/k8m4/n8) + n4; k8m2 (G=0.9935, within n=1 noise of 1) is excluded from the direction count.
 Fitting used only the calibration point flag; the six holdout points never participated — the failures in the table are real failures, not overfitting failures.
 
 Two reading notes:
 
-- **The closest in magnitude (M2, MAE 0.062) flips sign on the scale axis**: it predicts
+- **The closest in magnitude (M2, MAE 0.060) flips sign on the scale axis**: it predicts
   two-hop winning at n8/n4, while measurement shows two-hop losing badly (G=0.90/0.86). The
   picture of hiding a fixed number of milliseconds per call over-hides once the call count doubles.
 - **The one with perfect direction (M4, 5/5) misses the magnitude gate by 2×**: the picture of
@@ -43,16 +43,16 @@ contradiction at its sharpest:
 
 | Geometry | mbs | measured G | Δ measured (ms) | Δ model (ms) | of which fixed cost | implied exposure ratio |
 |---|---|---|---|---|---|---|
-| flag | 1 | 1.0355 | **−152** | +1018 | 1000 | **−0.15** |
-| tok2x | 2 | 0.8845 | +437 | +1033 | 990 | +0.42 |
-| tok4x | 4 | 0.8234 | +642 | +1041 | 985 | +0.62 |
-| k8m2 | 1 | 0.9935 | +31 | +1330 | 1327 | +0.02 |
-| k8m4 | 1 | 0.9335 | +332 | +1411 | 1327 | +0.24 |
-| n8 | 1 | 0.9027 | +718 | +2083 | 2001 | +0.34 |
-| n4 | 1 | 0.8647 | +1833 | +4151 | 4002 | +0.44 |
+| flag | 1 | 1.0355 | **−152** | +993 | 1001 | **−0.15** |
+| tok2x | 2 | 0.8845 | +437 | +1020 | 990 | +0.43 |
+| tok4x | 4 | 0.8234 | +642 | +1033 | 985 | +0.62 |
+| k8m2 | 1 | 0.9935 | +31 | +1300 | 1327 | +0.02 |
+| k8m4 | 1 | 0.9335 | +332 | +1425 | 1327 | +0.23 |
+| n8 | 1 | 0.9027 | +718 | +2072 | 2001 | +0.35 |
+| n4 | 1 | 0.8647 | +1833 | +4216 | 4002 | +0.44 |
 
 - The communication model's step delta is **almost entirely the fixed cost of "arrival chain +
-  splits sync"** (flag: 1000 of the 1018); on a bandwidth-flat machine the two arms' pure
+  splits sync"** (flag: 1001 of the 993, with the wire term slightly favoring two-hop); on a bandwidth-flat machine the two arms' pure
   communication difference is near zero — so step-level prediction stakes everything on
   "how much of the fixed cost gets hidden by overlap".
 - The implied exposure ratio runs from −0.15 to +0.62 — **not even the sign is consistent**:

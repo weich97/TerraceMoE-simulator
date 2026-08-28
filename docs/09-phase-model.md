@@ -206,8 +206,8 @@ constant.
 
 Not much, and that is the useful part. Charging two-hop one extra host exposure of
 130 microseconds moves the breakeven hierarchy ratio on the reference geometry from
-3.87 to 4.04. Remove the arrival chain and the same 130 microseconds moves it from
-1.07 to 1.24. So the ordering is confirmed rather than disturbed: **the arrival
+3.98 to 4.15. Remove the arrival chain and the same 130 microseconds moves it from
+1.10 to 1.27. So the ordering is confirmed rather than disturbed: **the arrival
 chain is worth more than the launch path, and fusing it comes first.**
 `sim/profile.py::launch_sensitivity` carries the measured point in its sweep.
 
@@ -228,8 +228,7 @@ also changes overlap, and overlap is exactly the gap this page exists to close.
 
 ## What it would unlock
 
-Tier-2 currently blocks all step-level extrapolation, which is why the platform
-map in `sim/platforms.py` is stated in communication-level terms. With the phase
-model calibrated, the same map could be given in end-to-end terms — "this platform
-class gains X% per step" rather than "communication is X× cheaper" — which is the
-form anyone deciding whether to adopt actually needs.
+Tier-2 currently blocks all step-level extrapolation, which is why the ratio-sensitivity
+map in `sim/platforms.py` is stated only in communication-call terms. Even with a calibrated
+phase model, a target-platform statement would still require target-local primitive
+measurements and validation rather than a nominal link-rate label.
