@@ -7,7 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sim.core import MoEGeometry, _interp, one_hop_call, two_hop_call  # noqa: E402
+from sim.core import (MoEGeometry, _interp, hop_a_self_fraction,
+                      one_hop_call, two_hop_call)                     # noqa: E402
 from sim.calibrate import aug_flat, synthetic                          # noqa: E402
 
 
@@ -20,6 +21,21 @@ def test_geometry_call_counts_match_ledger():
     # n8: EP=64 -> microbatches double
     n8 = MoEGeometry(name="n8", n_groups=8, R=8, k=6, M=2, mbs=1)
     assert n8.microbatches == 8
+
+
+def test_hop_a_self_fraction_matches_equations_1_and_2():
+    """Hop A has one local group among N_g, independent of selected-group count M.
+
+    ``M/N_g`` is the expected *number* of local Hop-A rows per token.  Dividing by
+    the M emitted rows gives the fraction ``1/N_g``.  This analytic identity is the
+    wire-byte deduction used by Equations (1)--(2) in the paper.
+    """
+    for m in (1, 2, 4, 8):
+        g = MoEGeometry(name="eq12", n_groups=16, R=8, k=8, M=m)
+        assert hop_a_self_fraction(g) == pytest.approx(1.0 / 16.0)
+        expected_wire_rows = g.tokens_per_rank * m * (15.0 / 16.0)
+        actual_wire_rows = g.rows_hop_a() * (1.0 - hop_a_self_fraction(g))
+        assert actual_wire_rows == pytest.approx(expected_wire_rows)
 
 
 def test_interp_clamps_do_not_extrapolate():
@@ -131,8 +147,8 @@ def test_overlap_family_structure_pins():
     # MAE snapshot pin for the docs/07 §1 table (±0.005): any move in the calibration
     # constants turns this red, a reminder to re-issue the docs/07 table in step
     # (review found a loose pin failed to catch a 20% drift in the arrival-chain constant)
-    for fam, doc in (("M0", 0.135), ("M1", 0.150), ("M2", 0.062),
-                     ("M3", 0.136), ("M4", 0.048), ("M5", 0.087)):
+    for fam, doc in (("M0", 0.140), ("M1", 0.150), ("M2", 0.060),
+                     ("M3", 0.133), ("M4", 0.045), ("M5", 0.088)):
         assert abs(res[fam]["mae"] - doc) <= 0.005,             "%s MAE=%.4f deviates from the docs/07 snapshot %.3f" % (fam, res[fam]["mae"], doc)
 
 
@@ -155,7 +171,7 @@ def test_mc_bands_reproducible_and_anchor_robust():
     b = mc_band(8.0, CHAIN_SCENARIOS[0][1])
     assert a == b, "same seed, different results -- reproducibility is broken"
     _, _, flat_p95 = mc_band(1.03, CHAIN_SCENARIOS[2][1])
-    # The flat column's most favourable case now sits just above 1.0 (1.04). That is the
+    # The flat column's most favourable case now sits just above 1.0 (1.03). That is the
     # honest consequence of modelling bandwidth saturation: on a flat fabric the *byte
     # account* is close to neutral, and what makes two-hop actually lose there is the
     # implementation overhead, which the zero-overhead tier deliberately removes.
@@ -168,13 +184,13 @@ def test_mc_bands_reproducible_and_anchor_robust():
 
 
 def test_breakeven_ordering_and_snapshot():
-    """The breakeven hierarchy ratio must fall monotonically with implementation tier and match the docs/05 snapshot (±0.1)."""
+    """The breakeven must follow the implementation tiers and the corrected Hop-A ledger."""
     from sim.uncertainty import breakeven_ratio
     from sim.sweep import CHAIN_SCENARIOS
     bes = [breakeven_ratio(chain) for _, chain in CHAIN_SCENARIOS]
     assert bes[0] > bes[1] > bes[2] >= 1.0
-    for got, doc in zip(bes, (3.87, 1.45, 1.07)):
-        assert abs(got - doc) <= 0.1, "breakeven %.2f deviates from the docs/05 snapshot %.2f" % (got, doc)
+    for got, doc in zip(bes, (3.98, 1.49, 1.10)):
+        assert abs(got - doc) <= 0.02, "breakeven %.2f deviates from the corrected snapshot %.2f" % (got, doc)
 
 
 def test_heatmap_monotone_in_ratio():
@@ -464,7 +480,7 @@ def test_platform_map_verdicts_follow_the_breakevens():
 
     Every cell is `ratio >= breakeven(tier)`, so the table cannot drift away from
     the calibration behind it. Also pins the two ends that carry the message: the
-    unified-fabric row is 'no' at every tier, and the high-ratio rows are 'yes' at
+    measured-flat row is 'no' at every tier, and the high-ratio rows are 'yes' at
     every tier -- if either flips, the headline table in README is wrong.
     """
     from sim.platforms import platform_map
@@ -473,12 +489,12 @@ def test_platform_map_verdicts_follow_the_breakevens():
         for tier, ok in r["verdict"].items():
             assert ok == (r["archetype"].ratio_nominal >= r["breakevens"][tier])
     by_key = {r["archetype"].key: r for r in rows}
-    assert not any(by_key["flat-supernode"]["verdict"].values())
-    assert all(by_key["nvlink-ib"]["verdict"].values())
-    assert all(by_key["rack-domain"]["verdict"].values())
+    assert not any(by_key["measured-a"]["verdict"].values())
+    assert all(by_key["ratio-9"]["verdict"].values())
+    assert all(by_key["ratio-18"]["verdict"].values())
     # the middle row is the interesting one: implementation tier decides it
-    mid = by_key["pcie-ib"]["verdict"]
-    assert sum(mid.values()) == 2, "PCIe+IB should pay only above the PyTorch tier"
+    mid = by_key["ratio-2"]["verdict"]
+    assert sum(mid.values()) == 2, "ratio 2 should pay only above the PyTorch tier"
 
 
 def test_platform_coverage_reports_the_gap_honestly():
@@ -490,6 +506,9 @@ def test_platform_coverage_reports_the_gap_honestly():
     from sim.platforms import PLATFORMS, coverage
     c = coverage()
     assert c["n_platforms"] == len(PLATFORMS) >= 2
+    assert c["n_ratio_measured"] == 1, (
+        "platform B has no separated fast/slow measurement and must not be counted "
+        "as a hierarchy-ratio sample")
     assert not c["spans_hierarchical"], (
         "a platform above ratio 1.5 is now calibrated -- update README's coverage "
         "paragraph and docs/05 before relaxing this test")

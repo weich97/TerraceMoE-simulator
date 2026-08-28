@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="576.45954pt" height="294.315pt" viewBox="0 0 576.45954 294.315" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="573.888915pt" height="294.315pt" viewBox="0 0 573.888915 294.315" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
@@ -21,8 +21,8 @@
  <g id="figure_1">
   <g id="patch_1">
    <path d="M 0 294.315 
-L 576.45954 294.315 
-L 576.45954 0 
+L 573.888915 294.315 
+L 573.888915 0 
 L 0 0 
 z
 " style="fill: #ffffff"/>
@@ -348,13 +348,13 @@ L 531.020798 256.109531
 " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
    <g id="text_14">
-    <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Helvetica', 'Arial', sans-serif; text-anchor: end; fill: #bb3333" x="532.309584" y="27.884587" transform="rotate(-0 532.309584 27.884587)">preregistered equivalence tolerance 0.02</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans', 'Helvetica', 'Arial', sans-serif; text-anchor: end; fill: #bb3333" x="532.309584" y="27.884587" transform="rotate(-0 532.309584 27.884587)">0.02 nats, tighter than the prespecified margin</text>
    </g>
    <g id="text_15">
     <text style="font-size: 8.5px; font-family: 'DejaVu Sans', 'Helvetica', 'Arial', sans-serif; text-anchor: end; fill: #555555" x="532.309584" y="189.311987" transform="rotate(-0 532.309584 189.311987)">seed noise from the training-log era 0.0056–0.0058</text>
    </g>
    <g id="text_16">
-    <text style="font-size: 12px; font-family: 'DejaVu Sans', 'Helvetica', 'Arial', sans-serif; text-anchor: middle" x="297.106102" y="16.318125" transform="rotate(-0 297.106102 16.318125)">Quality cost: T-Route +0.0034 nats, 1/5 of the tolerance (the 0.1 criterion sits 5x off-chart)</text>
+    <text style="font-size: 12px; font-family: 'DejaVu Sans', 'Helvetica', 'Arial', sans-serif; text-anchor: middle" x="297.106102" y="16.318125" transform="rotate(-0 297.106102 16.318125)">Quality cost: T-Route +0.0034 nats, 3.4% of the prespecified 0.1 nats, which sits off-chart</text>
    </g>
    <g id="legend_1">
     <g id="patch_12">

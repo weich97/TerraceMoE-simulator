@@ -187,18 +187,32 @@ def one_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
                    self_fraction=1.0 / g.ep)
 
 
+def hop_a_self_fraction(g: MoEGeometry) -> float:
+    """Fraction of Hop-A rows that stay in the source group.
+
+    A token emits ``M`` Hop-A rows, one for each selected group.  Under the
+    uniform-routing assumption used by the balanced calibration, ``M/N_g`` of
+    those rows are expected to target the source group *per token*.  Dividing by
+    the ``M`` emitted rows gives the self-copy fraction ``1/N_g``.  Keeping this
+    calculation separate prevents the expected self-row count from being mistaken
+    for a fraction again.
+    """
+    return 1.0 / g.n_groups if g.n_groups > 1 else 1.0
+
+
 def two_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
     """T-A2A two-hop (serial, matching the current implementation; internal measurement records: no pipelining).
 
-    Hop A: cross-group domain, world = n_groups; self-copy share = M/n_groups, the
-           expectation of selecting one's own group (that copy's _send_index always
-           equals the sender -- purely local; internal measurement records).
+    Hop A: cross-group domain, world = n_groups; a token has M/N_g expected local
+           rows among M emitted rows, so the self-copy share is 1/N_g (that copy's
+           _send_index always equals the sender -- purely local; internal measurement
+           records).
     Hop B: intra-group domain, world = R; self-copy 1/R.
     Extra: one splits host sync (two-hop does one more variable-length exchange than
            one-hop) + the local arrival chain (per row).
     """
     a = _a2a_ms(c.slow, g.n_groups, g.rows_hop_a(), g.row_bytes(),
-                self_fraction=g.M / g.n_groups if g.n_groups > 1 else 1.0)
+                self_fraction=hop_a_self_fraction(g))
     b = _a2a_ms(c.fast, g.R, g.rows_hop_b(), g.row_bytes(),
                 self_fraction=1.0 / g.R)
     chain = c.chain_us_per_row * g.rows_hop_b() / 1000.0

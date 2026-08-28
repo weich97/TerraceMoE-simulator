@@ -81,13 +81,13 @@ for i, (dat, off, lab) in enumerate([(D20, -0.17, "readout @20k steps"),
            alpha=(0.95 if i else 0.55), label=lab, edgecolor="white")
     ax.errorbar(xs, ys, yerr=[lo, hi], fmt="none", ecolor="#333", capsize=4, lw=1.2)
 ax.axhline(0.02, color="#B33", ls="--", lw=1.2)
-ax.text(2.46, 0.0205, "preregistered equivalence tolerance 0.02", color="#B33", ha="right", fontsize=9)
+ax.text(2.46, 0.0205, "0.02 nats, tighter than the prespecified margin", color="#B33", ha="right", fontsize=9)
 ax.axhspan(0.0056, 0.0058, color="#888", alpha=0.35)
 ax.text(2.46, 0.0060, "seed noise from the training-log era 0.0056–0.0058", color="#555",
         ha="right", fontsize=8.5)
 ax.set_xticks(list(x), MODES3)
 ax.set_ylabel("Δ val loss vs unconstrained top-k (nats, lower is better)")
-ax.set_title("Quality cost: T-Route +0.0034 nats, 1/5 of the tolerance (the 0.1 criterion sits 5x off-chart)")
+ax.set_title("Quality cost: T-Route +0.0034 nats, 3.4% of the prespecified 0.1 nats, which sits off-chart")
 ax.legend(frameon=False, loc="upper left")
 _style(ax)
 fig.tight_layout()
@@ -131,7 +131,7 @@ pts = [("HellaSwag\nacc_norm", 0.158, -0.095, 0.411),
 ax.axhspan(-1.0, 1.0, color=C["full"], alpha=0.10)
 ax.axhline(1.0, color=C["full"], ls="--", lw=1)
 ax.axhline(-1.0, color=C["full"], ls="--", lw=1)
-ax.text(1.45, 1.06, "preregistered equivalence bounds ±1.0 pp", color=C["full"], ha="right", fontsize=9)
+ax.text(1.45, 1.06, "prespecified equivalence bounds ±1.0 pp", color=C["full"], ha="right", fontsize=9)
 for i, (n, m, lo, hi) in enumerate(pts):
     ax.errorbar([i], [m], yerr=[[m - lo], [hi - m]], fmt="o", color=C["full"],
                 capsize=5, ms=7, lw=1.5)
