@@ -229,3 +229,17 @@ def compute_bound_threshold(template: MoEArch, machine: Machine,
         else:
             lo = mid
     return hi
+
+
+if __name__ == "__main__":
+    from .codesign import REFERENCE_ARCH, synthetic_dgx_h100
+
+    m = synthetic_dgx_h100()
+    print("Envelope on the %s (synthetic sensitivity; residency unmeasured, "
+          "see docs/11)" % m.fabric.name)
+    print()
+    print(table(envelope(REFERENCE_ARCH, m)))
+    print()
+    print("first-order compute/comm balance width: %d" % first_order_threshold(m))
+    print("full-model compute-bound width, best strategy: %d"
+          % compute_bound_threshold(REFERENCE_ARCH, m))

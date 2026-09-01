@@ -8,18 +8,36 @@ per token, or anything else the model designer is usually optimising. It enters 
 the deduplication quota `q = k/M`: tightening `M` at fixed `k` raises `q`, and the
 slow-side saving is `(q-1)/q`.
 
-The system side is computed. On a synthetic DGX H100 with NDR400 (8 cards per node, 16
-nodes, 450 against 50 GB/s, the measured alpha curve, `x_half` 46 KiB) at hidden 7168,
-expert width 2048, 256 experts, `k = 8`, one MoE layer, 4096 tokens per rank:
+The system side is computed. On the synthetic DGX H100 with NDR400 that
+`sim.codesign.synthetic_dgx_h100` constructs (8 cards per node, 16 nodes, 450 against
+50 GB/s, the measured alpha curve, `x_half` 54 KiB and the arrival chain priced at this
+hidden width by `sim/machine.py`, all borrowed constants labeled in the constructor) at
+hidden 7168, expert width 2048, 256 experts, `k = 8`, one MoE layer, 4096 tokens per
+rank:
 
-| M | q = k/M | G, 16-op chain | G, fused kernel |
+| M | q = k/M | G, PyTorch chain | G, fused kernel |
 |---|---|---|---|
-| 4 | 2 | 1.268 | 1.835 |
-| 2 | 4 | 1.565 | 2.529 |
-| 1 | 8 | 1.845 | 3.353 |
+| 4 | 2 | 0.948 | 1.490 |
+| 2 | 4 | 1.204 | 2.234 |
+| 1 | 8 | 1.391 | 2.979 |
 
-Reproduce with `sim.codesign.dispatch_breakdown`. These are dispatch-call ratios, not
-step times: the step-level gate fails.
+Reproduce with `python -m sim.codesign`; a test pins every cell. These are
+dispatch-call ratios, not step times: the step-level gate fails. On the PyTorch
+operator chain, `M = 4` is a loss even at ratio 9 and tightening to `M = 1` turns it
+into a 1.39 win; with the fused chain every cap wins and tightening is worth 1.49 to
+2.98. The chain, as everywhere else in this repository, moves the verdict more than
+the cap does.
+
+> **Correction (2026-09-01).** An earlier version of this table read 1.268 / 1.565 /
+> 1.845 and 1.835 / 2.529 / 3.353, with `x_half` stated as 46 KiB. Those numbers were
+> produced by a construction that was not recorded and cannot be reproduced from the
+> shipped code; back-solving them yields a different arrival-chain cost per row at each
+> `M`, which no single construction produces. The table above is computed by the
+> constructor named beside it, and the numbers are pinned by `tests/test_codesign.py`
+> so they cannot drift again. The stale table overstated the PyTorch-chain column by
+> 30 to 34 percent and the fused column by 13 to 23 percent; the direction is
+> unchanged, but the corrected PyTorch-chain column now puts `M = 4` below 1, which
+> the stale table did not.
 
 The quality side is measured at exactly one point. Corpus Q1 ran `E = 128` in 8 groups
 of 16 with `k = 8` and `M = 4`, and found the conjunction costs `+0.0034` nats, 3.4% of

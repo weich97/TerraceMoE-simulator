@@ -163,3 +163,15 @@ def table(cands, top: int = 12) -> str:
     lines.append("sum(UB) is dispatch plus expert with nothing overlapped, an upper "
                  "bound and not a step time: the step-level gate fails.")
     return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    from .codesign import REFERENCE_ARCH, synthetic_dgx_h100
+
+    m = synthetic_dgx_h100()
+    print("Granularity x group-cap search at the reference capacity on the %s"
+          % m.fabric.name)
+    print("(synthetic sensitivity; quality of each point is NOT priced, and M is "
+          "measured at M=4 only, see docs/12)")
+    print()
+    print(table(search(REFERENCE_ARCH, m)))

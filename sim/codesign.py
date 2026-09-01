@@ -25,7 +25,8 @@ here, neither is a constant.
 
 The communication terms compose from ``core.one_hop_call`` and ``core.two_hop_call``,
 which pass the Tier-1 gate at 4.1 percent median error. The arrival chain comes from ``machine.py``,
-which reproduces its own measured sweep to 4.2 percent. The compute-bound branch of the
+which reproduces its own measured sweep to 2.9 percent worst case (tests pin it). The
+compute-bound branch of the
 expert matmul comes from ``compute.py``'s measured roofline and its eight measured
 non-square shapes.
 
@@ -398,3 +399,75 @@ def sweep(base: MoEArch, machine: Machine, knob: str, values,
         except ValueError as e:
             out.append((v, {"error": str(e)}))
     return out
+
+
+# ---------------------------------------------------------------------------
+# The synthetic reference machine, so a sensitivity table has a construction
+# ---------------------------------------------------------------------------
+
+def synthetic_dgx_h100(nodes: int = 16, chain: ArrivalChain = PYTORCH_CHAIN) -> Machine:
+    """A synthetic H100 fabric, every parameter with a stated source.
+
+    This is a sensitivity construction, not a platform prediction: no constant here was
+    measured on an H100. Vendor figures carry the vendor's meaning (HBM 3.35 TB/s,
+    80 GB, 989 dense bf16 TFLOPS, NVLink 450 GB/s per direction, NDR400 = 50 GB/s).
+    Everything else is borrowed from platform A under the discipline stated where each
+    constant lives: the alpha curve and x_half from ``calibrate`` (borrow the shape,
+    never trust the level), the launch cost from the world-8 deep-queue scan, and the
+    row-gather bandwidth as machine A's absolute 490 GB/s via ``from_gather_bw``,
+    because machine A's HBM figure is not recorded here and so no efficiency transfers.
+    An H100's real gather is plausibly faster, which would cheapen the arrival chain
+    and raise every two-hop figure computed on this machine; the borrow is conservative
+    in that known direction.
+    """
+    from .calibrate import ALPHA_PTS, X_HALF_FLAT
+    from .machine import GATHER_GBPS_MEASURED, Accelerator
+
+    accel = Accelerator.from_gather_bw(
+        "synthetic H100 SXM", gather_gbps=GATHER_GBPS_MEASURED,
+        hbm_capacity_gb=80.0, launch_ms=0.129, hbm_gbps=3350.0,
+        peak_tflops=989.0,
+        notes="vendor datasheet numbers; gather and launch borrowed from platform A")
+    fabric = Fabric(
+        name="synthetic DGX H100 + NDR400, %d nodes" % nodes,
+        cards_per_node=8, nodes=nodes,
+        beta_intra_gbps=450.0, beta_inter_gbps=50.0,
+        alpha_ms=tuple(ALPHA_PTS), x_half_bytes=float(X_HALF_FLAT))
+    return Machine(accel, fabric, chain)
+
+
+#: The docs/12 reference architecture: DeepSeek-V3-like MoE layer, one layer priced.
+REFERENCE_ARCH = MoEArch(name="reference", hidden=7168, d_expert=2048,
+                         n_experts=256, k=8, M=4, n_moe_layers=1,
+                         seq=4096, mbs=1)
+
+
+def m_table(arch: MoEArch = REFERENCE_ARCH) -> list:
+    """The docs/12 group-cap table: G at each M, for both arrival-chain tiers.
+
+    Returns rows of (M, q, G_pytorch_chain, G_fused_chain). Dispatch-call ratios only;
+    the step-level gate fails.
+    """
+    from .machine import FUSED_CHAIN
+    rows = []
+    for M in (4, 2, 1):
+        a = replace(arch, M=M)
+        g16 = dispatch_breakdown(a, synthetic_dgx_h100(chain=PYTORCH_CHAIN))["G"]
+        gfu = dispatch_breakdown(a, synthetic_dgx_h100(chain=FUSED_CHAIN))["G"]
+        rows.append((M, a.q, g16, gfu))
+    return rows
+
+
+if __name__ == "__main__":
+    m = synthetic_dgx_h100()
+    print(m.fabric.name)
+    print("ratio %.1f, alpha and x_half borrowed from platform A, gather %d GB/s "
+          "borrowed" % (m.fabric.ratio, m.accel.gather_gbps))
+    print()
+    print("%-4s %-6s %18s %18s" % ("M", "q=k/M", "G, PyTorch chain", "G, fused kernel"))
+    for M, q, g16, gfu in m_table():
+        print("%-4d %-6d %18.3f %18.3f" % (M, q, g16, gfu))
+    print()
+    print("Synthetic sensitivity on the construction above; dispatch-call ratios, not "
+          "step times: the step-level gate fails. Quality cost of tightening M is "
+          "measured at M=4 only; see docs/12-m-quality-experiment.md.")
