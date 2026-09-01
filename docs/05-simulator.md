@@ -381,3 +381,15 @@ python -m sim.uncertainty        # Monte Carlo uncertainty bands + breakeven (fi
 python tools/gen_sim_figures.py  # regenerate F7-F12 (numbers computed live; only F12 embeds measurements)
 python -m pytest tests/test_sim.py -q
 ```
+
+The co-design layer turns the same terms around — which architectures a machine runs
+well (`sim/machine.py`, `sim/codesign.py`, `sim/envelope.py`, `sim/archsearch.py`,
+`sim/record.py`; pinned by `tests/test_codesign.py`):
+
+```
+python -m sim.codesign           # the docs/12 group-cap table on the synthetic reference machine
+python -m sim.envelope           # the model-size band a cluster runs well, both edges with reasons
+python -m sim.archsearch         # granularity x group-cap search at fixed capacity
+python -m sim.record             # the one controlled check the published record permits (docs/13 §5)
+python -m pytest tests/test_codesign.py -q
+```

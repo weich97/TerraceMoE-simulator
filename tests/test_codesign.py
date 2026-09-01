@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Pins for the co-design layer: machine.py, codesign.py, envelope.py, archsearch.py.
+"""Pins for the co-design layer: machine.py, codesign.py, envelope.py, archsearch.py,
+record.py.
 
 Every numeric claim those modules' docstrings make is asserted here, so it cannot
 drift silently: the arrival-chain model against its own measured sweeps, the docs/12
-group-cap table cell by cell, and the provenance flags that mark unmeasured residency.
+group-cap table cell by cell, the provenance flags that mark unmeasured residency, and
+the two directional checks the published record permits (sim/record.py).
 """
 import pytest
 
@@ -14,7 +16,7 @@ from sim.codesign import (REFERENCE_ARCH, UNMEASURED, MemoryProfile, MoEArch,
                           dispatch_breakdown, expert_matmul, m_table,
                           min_ep_for_memory, profile, residency,
                           synthetic_dgx_h100)
-from sim import archsearch, envelope
+from sim import archsearch, envelope, record
 
 LAUNCH_MS_A = 0.129  # measured world-8 deep-queue per-call cost, platform A
 
@@ -228,3 +230,35 @@ def test_rank_sorts_by_the_no_overlap_upper_bound():
     assert all(c.feasible for c in ranked)
 
 
+# ---------------------------------------------------------------------------
+# record.py: the two directional checks the published record permits
+# ---------------------------------------------------------------------------
+
+def test_record_directional_checks_hold():
+    ck = record.checks()
+    assert ck["granularity_ordering_holds"] is True
+    assert ck["endpoint_decline_holds"] is True
+
+
+def test_record_model_prefers_the_nvlink_domain():
+    # For both shapes at every cluster size the model keeps the expert-parallel
+    # group inside one fast domain, which is the repository's own domain doctrine.
+    for cluster in record.MPF_CLUSTERS:
+        for arch in (record.MIXTRAL_8X22B, record.MIXTRAL_G8T8):
+            ep, _ = record.best_point(arch, cluster)
+            assert ep == 8, "%s at %d chose EP=%d" % (arch.name, cluster, ep)
+
+
+def test_record_ceilings_pinned():
+    rows = {(c, n): ceil for c, _, n, _, ceil, _ in record.comparison()}
+    assert rows[(128, "Mixtral 8x22B")] == pytest.approx(90.1, abs=0.2)
+    assert rows[(128, "Mixtral-8x22B-G8T8")] == pytest.approx(58.1, abs=0.2)
+    assert rows[(1024, "Mixtral 8x22B")] == pytest.approx(81.2, abs=0.2)
+    assert rows[(1024, "Mixtral-8x22B-G8T8")] == pytest.approx(57.2, abs=0.2)
+
+
+def test_record_capacity_is_actually_controlled():
+    a, b = record.MIXTRAL_8X22B, record.MIXTRAL_G8T8
+    assert a.n_experts * a.d_expert == b.n_experts * b.d_expert
+    assert a.hidden == b.hidden and a.n_moe_layers == b.n_moe_layers
+    assert b.k * b.d_expert * 2 == a.k * a.d_expert  # active halved, as published

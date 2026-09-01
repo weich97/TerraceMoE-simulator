@@ -1,11 +1,13 @@
 # 13. Published MoE training runs: cluster size against model size and MFU
 
-**Status: gathered, not adopted.** This is a literature sweep run to test whether the
-published record constrains the model-size band a cluster runs well, which is the lower
-edge `sim/envelope.py` computes from the cost model. It has been through source and
-arithmetic verification passes but nothing here has been checked by hand against the
-primary sources, and none of it is used by any code in this repository. Treat every
-figure as a lead to verify, not as a datum.
+**Status: gathered; one controlled pair adopted, the rest not.** This is a literature
+sweep run to test whether the published record constrains the model-size band a cluster
+runs well, which is the lower edge `sim/envelope.py` computes from the cost model. It
+has been through source and arithmetic verification passes but nothing here has been
+checked by hand against the primary sources. Exactly one item is read by code: the MoE
+Parallel Folding granularity pair, whose verifier-confirmed shapes and MFU values feed
+the two directional checks in `sim/record.py` (section 5). Everything else remains
+unadopted; treat every figure as a lead to verify, not as a datum.
 
 Extracted 93 runs before verification. Dropped and corrected entries are listed in the
 scope section below.
@@ -267,3 +269,40 @@ The frontier clusters at 0.5 M – 8 M globally. GShard is three orders of magni
 9. **Report MFU and HFU together with the FLOPs formula.** Only PaLM (46.2 % / 57.8 %) and Korthikanti (41.5/43.7, 51.4/52.8, 56.0/57.0, 56.3/57.0) do both. Megatron‑LM PTD‑P's "% of peak" is recomputation‑inclusive and is silently incomparable to every MFU quoted elsewhere; without the formula, cross‑paper curves cannot be assembled.
 
 10. **State the cluster size at all.** Twenty surviving runs — including Kimi K2 at 1.04 T, Qwen3‑235B, GLM‑4.5, Hunyuan‑Large, Mixtral, Grok‑1, and Switch‑C — do not. Until frontier MoE reports publish accelerator counts alongside MFU, no amount of re‑analysis will recover this relation from the literature.
+
+---
+
+## 5. What the record *can* check, and the result
+
+The verdict above is that the record cannot locate the lower edge, so it cannot
+validate `sim/envelope.py`'s placement of it. One thing in the record is nevertheless a
+controlled experiment on an axis the co‑design layer prices: MoE Parallel Folding
+trains Mixtral 8x22B and its own fine‑grained reparameterisation (G8T8: 64 experts at
+one‑eighth width, top‑8) on the same Eos H100 cluster, same stack, same global batch,
+and reports MFU for both at four cluster sizes. Same backbone, same total expert
+parameters — only the expert shape moves, which is `sim/archsearch.py`'s granularity
+axis. The paper even names the model's mechanism: *"the smaller hidden sizes decrease
+GEMM efficiency."*
+
+`python -m sim.record` prices both shapes on the synthetic H100 construction
+(`sim.codesign.synthetic_dgx_h100`, borrowed constants labeled there) at the expert
+parallelism the model itself prefers, and runs the only two checks the comparison
+supports. Both hold:
+
+| Check | Result |
+|---|---|
+| G8T8's MoE‑layer ceiling below Mixtral's at every cluster size | **holds** (57–59 % against 81–90 %) |
+| Neither ceiling higher at 4,096 tokens/accelerator than at 32,768 | **holds** |
+
+What this is not: the ceilings are MoE‑layer‑only quantities on a synthetic machine and
+are not MFU predictions, so the absolute levels check nothing in either direction. The
+ceiling also moves less across the sweep than the published MFU does — which is
+consistent with the record rather than against it, because the two papers that explain
+their own fixed‑batch decline (§3b) attribute it to pipeline bubbles and per‑DP‑group
+batch, step‑level schedule quantities that sit behind this repository's failed Tier‑2
+gate. The paper does not state its EP degree, so the model was allowed to choose; it
+keeps both shapes inside one NVLink domain, which is the repository's own domain
+doctrine. Residency is out of scope: under pure expert parallelism neither shape's
+weights‑plus‑optimizer fit, because the real runs shard over PP and ZeRO, which the
+co‑design layer does not price. `tests/test_codesign.py` pins the checks and the
+ceiling values.
