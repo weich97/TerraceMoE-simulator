@@ -17,3 +17,10 @@ paper/main.pdf
 
 # Paper source is kept locally and managed in Overleaf, not in this repository.
 paper/
+
+# Overleaf staging and the built package. Paper material, same rule as paper/.
+output/
+
+# Scratch space and stray pdflatex output from running a build at the repo root.
+tmp/
+texput.log
