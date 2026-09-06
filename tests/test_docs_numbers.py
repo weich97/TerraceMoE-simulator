@@ -223,6 +223,15 @@ claim("docs/05-simulator.md",
       "| p = 2, overlap, o = {n} us | {n}% | {n}% | {n}% | {n}% | {n}% |",
       lambda: _recalibration_table(), 0.006)
 
+claim("docs/05-simulator.md",
+      "| **burst**, host runs ahead | {n}% | **{n}%** | {n} GB/s | "
+      "| **percall**, host waits per call | **{n}%** | {n}% | {n} GB/s |",
+      lambda: _host_regime_table(), 0.06)
+
+claim("docs/05-simulator.md",
+      "0.114 ms at world 8 and {n} at world 16",
+      lambda: [_regime_alpha()[16]], 0.001)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -350,6 +359,23 @@ def _recalibration_table():
         for tg, sp in ((TARGETS_A, a), (TARGETS_B, b), (TARGETS_C, a), (TARGETS_D, a)):
             out.append(100 * validate_sweep(sp, tg, verbose=False)[1]["median"])
     return out
+
+
+def _host_regime_table():
+    from sim.hostregime import compare_styles
+    r = compare_styles()
+    out = []
+    for st in ("burst", "percall"):
+        out += [100 * r[st]["additive (shipped)"]["median"],
+                100 * r[st]["quadrature"]["median"],
+                r[st]["additive (shipped)"]["beta_inf"]]
+    return out
+
+
+def _regime_alpha():
+    from sim.hostregime import compare_styles
+    return {w: round(v, 3)
+            for w, v in compare_styles()["burst"]["quadrature"]["alpha"].items()}
 
 
 def _chain_sweep_ms():

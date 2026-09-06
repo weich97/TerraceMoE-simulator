@@ -823,6 +823,74 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
+def test_the_host_regime_decides_which_rule_a_collective_obeys():
+    """The measurement that closed the open question, pinned.
+
+    Both timing styles were run on the same machine, at the same worlds, over the same
+    sizes, in one session (sim/hostregime.py, taken with bench/a2a_form_probe.py). The
+    two want opposite rules: with the host running ahead the fixed cost hides behind
+    the transfer, and with the host watching each call the two serialise and add.
+
+    Four things are pinned, because each is a separate reason to believe it.
+    """
+    from sim.calibrate import ALPHA_PTS
+    from sim.hostregime import (MEASURED, PHYSICAL_CEILING_GBPS, PLATEAU_MS,
+                                compare_styles, preferred_rule, rows)
+
+    assert len(MEASURED) == 46
+
+    # 1. the verdict, and it does not depend on how the noisy burst points are trimmed
+    for cut in (0.15, 0.30, 1.0, 99.0):
+        res = compare_styles(max_spread=cut)
+        b, p = res["burst"], res["percall"]
+        assert b["quadrature"]["median"] < b["additive (shipped)"]["median"] / 2, (
+            "cut %.2f: burst wants the overlap rule" % cut)
+        assert p["additive (shipped)"]["median"] < p["quadrature"]["median"], (
+            "cut %.2f: percall wants the additive rule" % cut)
+    assert preferred_rule("burst") == "quadrature"
+    assert preferred_rule("percall") == "additive (shipped)"
+
+    # 2. the additive rule can only fit the burst data by asking for a bandwidth the
+    #    hardware does not have; the overlap rule fits inside the ceiling
+    res = compare_styles()
+    assert res["burst"]["additive (shipped)"]["beta_inf"] > PHYSICAL_CEILING_GBPS
+    assert res["burst"]["quadrature"]["beta_inf"] < PHYSICAL_CEILING_GBPS
+    assert res["percall"]["additive (shipped)"]["beta_inf"] < PHYSICAL_CEILING_GBPS
+
+    # 3. the alpha the overlap rule recovers from the burst data lands near the
+    #    independent call-count scan, which took no part in the fit
+    a = res["burst"]["quadrature"]["alpha"]
+    assert a[8] == pytest.approx(0.114, abs=0.01)
+    assert a[16] == pytest.approx(0.120, abs=0.01)
+    assert a[8] == pytest.approx(dict(ALPHA_PTS)[8], abs=0.01), (
+        "the world-8 entry of the shipped table is confirmed to three digits")
+    assert abs(a[16] - dict(ALPHA_PTS)[16]) > 0.03, (
+        "and the world-16 entry is not: this is the disagreement hostregime records")
+    assert abs(a[16] - a[8]) < 0.02, (
+        "alpha barely moves crossing to a second node, so the table's 41% step is not "
+        "in this measurement either")
+
+    # 4. the plateaus differ by the factor of two docs/09 measured as host exposure,
+    #    reproduced here without being looked for
+    from sim.hostregime import plateau
+    for (style, world), doc in PLATEAU_MS.items():
+        assert plateau(style, world) == pytest.approx(doc, abs=0.001)
+    for world in (8, 16):
+        ratio = plateau("percall", world) / plateau("burst", world)
+        assert 1.8 < ratio < 2.6, "world %d host exposure factor %.2f" % (world, ratio)
+    # and the burst plateau barely moves crossing to a second node, which is the same
+    # flatness that makes the table's alpha(16) suspect
+    assert abs(plateau("burst", 16) - plateau("burst", 8)) < 0.01
+
+    # and the rule the repository ships is the one its own use case is in: a
+    # variable-length dispatch cannot be issued until its counts reach the host
+    from sim.calibrate import flat_supernode
+    assert flat_supernode().combine_exponent == 1.0
+    assert flat_supernode().splits_sync_ms > 0, (
+        "the splits readback is why an MoE dispatch is in the host-exposed regime")
+    assert len(rows("burst")) < len(rows("burst", max_spread=99.0))
+
+
 def test_the_two_benchmark_families_want_different_model_forms():
     """Recalibrate the whole model under each rule, then run every gate. The decisive test.
 

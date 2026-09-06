@@ -414,15 +414,62 @@ from the size-sweep family.
 So the two families do not merely disagree about the level of the same machine, which is what
 `sim/fit.py` already records. **They disagree about what a collective costs**: one says the
 fixed cost precedes the transfer, the other says it overlaps it. No amount of offline fitting
-adjudicates that, and the shipped model stays additive because that is the form the blind gate
-was passed under. What would settle it is cheap and specific — one run of both benchmark styles
-at the same world over the same sizes — and until someone runs it, this is a real open question
-about the machine rather than a modelling preference.
+adjudicates that, so the measurement was taken.
 
-Two smaller notes. `sim/core.py` now carries the rule as a parameter (`combine_exponent`)
-instead of an assumption, so a machine that wants the other one can say so and be scored
-honestly. And corpus D fails under both rules, at 16.9% and 19.0%, which agrees with its own
-diagnosis: it is a drift probe on `alpha(8)`, not a question about the form.
+Corpus D fails under both rules, at 16.9% and 19.0%, which agrees with its own diagnosis: it
+is a drift probe on `alpha(8)`, not a question about the form. And `sim/core.py` now carries
+the rule as a parameter (`combine_exponent`) instead of an assumption.
+
+### The measurement that settled it
+
+Both timing styles, on the same machine, at the same worlds, over the same sizes, in one
+session: 46 points from 64 KiB to 256 MiB at worlds 8 (one node) and 16 (two nodes), dense
+through the 13 MB region where the two rules differ most. Two idle nodes, about twenty minutes.
+The instrument is `bench/a2a_form_probe.py`, the data and the analysis are
+`sim/hostregime.py`, and `python -m sim.hostregime` reprints the table below.
+
+| timing style | additive | quadrature | β the additive rule demands |
+|---|---:|---:|---:|
+| **burst**, host runs ahead | 12.5% | **4.3%** | 135.2 GB/s |
+| **percall**, host waits per call | **2.3%** | 3.9% | 105.8 GB/s |
+
+**The two styles want opposite rules, and left to itself the data picks them out.** With the
+exponent free rather than fixed, the percall data lands at p = 0.99, which is addition, and the
+burst data is driven to the bound, a hard maximum. Neither was told what to find. The verdict
+survives every trimming of the noisy small-size burst points, including no trimming at all.
+
+Two independent checks agree with it. Forcing the additive rule onto the burst data requires
+135.2 GB/s, **above the 122.4 GB/s per-card aggregate egress this page endorses as physics**,
+while the overlap rule fits at 106.9 and stays inside it — the same signature the shipped
+corpora showed. And the α the overlap rule recovers from the burst data, 0.114 ms at world 8
+and 0.120 at world 16, lands near the independent call-count scan's 0.129 and 0.134, a
+benchmark that took no part in the fit.
+
+**The rule is a property of the host regime, not of the machine.** Running ahead, the next call
+is set up while the previous one is still moving bytes, so the fixed cost hides behind the
+transfer and the call costs the larger of the two. Watching each call, the two serialise and
+add. Both corpora were right about their own measurement, which is why neither could be
+dismissed, and the plateau each style sits at differs by exactly the factor of two
+[docs/09](09-phase-model.md) measured as host exposure — reproduced here without being looked
+for.
+
+**The shipped model stays additive, now for a reason rather than by inheritance.** An MoE
+dispatch is host-exposed by construction: a variable-length all-to-all cannot be issued until
+its per-peer counts have returned to the host, which `core.py` already prices as
+`splits_sync_ms`. That is the percall regime, and the percall regime adds.
+
+One shipped constant comes out of this worse than it went in, and is recorded rather than
+changed. Fitted under the rule the burst data turns out to want, α(16) is 0.120 against the
+table's 0.157, while α(8) is confirmed at 0.114 against 0.111. The 41% step the table puts
+between the two worlds is not in this measurement either, and α barely moves crossing to a
+second node — which is what a bandwidth-flat supernode should do and exactly what the
+call-count scan reported when this page could not adjudicate it. **Three benchmarks now say the
+step is not real and only the table says it is.** The constant still does not move, because
+changing it on the strength of a benchmark it was not fitted against is the mixing error the
+calibration warns about, and because the corpus it would green (D) and the corpus it would
+redden (C) are the pair this repository already refuses to choose between. What has changed is
+that this is no longer one reading against another: it is two against a table entry, and the
+next recalibration should start there.
 
 ## Payload: what the model varies, and what it deliberately does not
 
@@ -559,6 +606,7 @@ python -m sim.imbalance         # routing skew: how much it favours two-hop
 python -m sim.platforms          # calibrated platforms + where the methods pay off
 python -m sim.profile            # is a given machine worth it, and which condition decides
 python -m sim.phase              # phase spans; refuses step time until calibrated (docs/09)
+python -m sim.hostregime         # which rule each timing style wants, and why it matters
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)
 python -m sim.overlap            # Tier-2 campaign: overlap model family battle report (docs/07)
