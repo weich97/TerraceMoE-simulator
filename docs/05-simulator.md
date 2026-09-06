@@ -390,18 +390,39 @@ Quadrature cuts the error to a third of the additive form's on machine A at **id
 parameter count**, and machine B reproduces the direction on its own independent fit. That is
 a large effect and it is not bought with a parameter.
 
-**It is not adopted, and the reason is the interesting part.** Two tests were fixed in advance
-and it failed both. Held out one corpus at a time, with the held-out world's alpha taken from
-the independent call-count scan and never fitted, the overlap form predicted the unseen world
-*worse* than the additive form in two cases of three. And refitted to the Tier-1 targets it
-was worse there too, 9.7% against 4.7%.
+**A better fit decides nothing on its own**, so the model was recalibrated from scratch
+under each rule and every gate rerun. The procedure is the one this page describes and it is
+identical for both: alpha measured and pinned, the shape borrowed from the machine with enough
+distinct sizes to resolve it, the level fitted on the machine's own corpus.
+`sim/calibrate.py::supernode_under_form` and `sim/fit.py::fit_pinned_under_form` carry it, so
+the table below reproduces from shipped code rather than from a description of it.
 
-Tier-1 belongs to the direct-alpha benchmark family and the corpora to the size-sweep family.
-So what this experiment actually measured is that **the two families differ in shape, not only
-in level** — a sharper statement than the level disagreement already recorded in
-`sim/fit.py`, and one that says what would settle it: a single run of both benchmarks at the
-same world over the same sizes. Nothing offline can. The negative result is recorded so the
-road is not walked twice.
+At `p = 1` the procedure recovers the shipped constants — x_half of 54 KiB and machine B's
+111.9 GB/s, both to the digit — and that is what licenses reading the `p = 2` row at all.
+
+| calibration | Tier-1 | corpus A | corpus B | corpus C | corpus D |
+|---|---:|---:|---:|---:|---:|
+| p = 1, additive, o = 0.495 us | 3.69% | 3.60% | 9.33% | 7.60% | 16.87% |
+| p = 2, overlap, o = 2.189 us | 7.83% | 5.32% | 5.75% | 5.21% | 18.96% |
+
+**The verdict is a split, and the split is the finding.** The overlap rule is clearly better on
+the two large size-sweep corpora, cutting B from 9.33% to 5.75% and C from 7.60% to 5.21%. It
+is just as clearly worse on Tier-1, more than doubling the error of the one gate that had to be
+passed blind. Tier-1's targets come from the direct-alpha benchmark family; the corpora come
+from the size-sweep family.
+
+So the two families do not merely disagree about the level of the same machine, which is what
+`sim/fit.py` already records. **They disagree about what a collective costs**: one says the
+fixed cost precedes the transfer, the other says it overlaps it. No amount of offline fitting
+adjudicates that, and the shipped model stays additive because that is the form the blind gate
+was passed under. What would settle it is cheap and specific — one run of both benchmark styles
+at the same world over the same sizes — and until someone runs it, this is a real open question
+about the machine rather than a modelling preference.
+
+Two smaller notes. `sim/core.py` now carries the rule as a parameter (`combine_exponent`)
+instead of an assumption, so a machine that wants the other one can say so and be scored
+honestly. And corpus D fails under both rules, at 16.9% and 19.0%, which agrees with its own
+diagnosis: it is a drift probe on `alpha(8)`, not a question about the form.
 
 ## Payload: what the model varies, and what it deliberately does not
 

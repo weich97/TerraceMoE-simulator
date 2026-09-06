@@ -280,6 +280,34 @@ def second_machine(x_half: float = None) -> ClusterSpec:
     )
 
 
+def supernode_under_form(p: float, per_peer_us: float, beta_inf: float,
+                         beta_fast: float = None, alpha_pts=None,
+                         ratio: float = CROSS_NODE_RATIO) -> ClusterSpec:
+    """The same machine under a different rule for combining fixed cost with transfer.
+
+    The shipped model adds them, and the saturating beta table expresses the per-peer
+    cost implicitly. Under any other exponent that identity does not hold, so the beta
+    tables are flat here and the per-peer cost is carried explicitly by ``per_peer_us``
+    (see core.ClusterSpec.combine_exponent).
+
+    Exists so the experiment behind docs/05's rejected-form section reproduces from
+    shipped code rather than from a description of it. Constants for it come from
+    ``fit.fit_pinned_under_form`` run at the same exponent, which is the procedure this
+    file describes: alpha pinned, shape borrowed from the machine that can resolve it,
+    level fitted on the machine's own corpus.
+    """
+    flat = [(1.0, beta_inf), (1e12, beta_inf)]
+    fast = ([(1.0, beta_fast), (1e12, beta_fast)] if beta_fast else flat)
+    return ClusterSpec(
+        name="supernode (p=%g)" % p, R=8,
+        fast=Level("node-internal", alpha_pts or ALPHA_PTS, fast),
+        slow=Level("cross-node", alpha_pts or ALPHA_PTS,
+                   [(x, b * ratio) for x, b in flat]),
+        flat=Level("full-fabric", alpha_pts or ALPHA_PTS, flat),
+        splits_sync_ms=SPLITS_SYNC_MS, chain_us_per_row=CHAIN_US_PER_ROW,
+        combine_exponent=p, per_peer_us=per_peer_us)
+
+
 # Backward-compatible alias (internal code/tests use this name)
 aug_flat = flat_supernode
 

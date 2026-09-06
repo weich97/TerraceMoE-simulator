@@ -207,8 +207,14 @@ def _predict(cluster, world: int, total_bytes: float) -> float:
     here, so both stay on one level and the observation is written down instead.
     """
     wire = total_bytes * (world - 1) / world
-    beta = cluster.flat.beta_gbps(total_bytes / world)
-    return cluster.flat.alpha_ms(world) + wire / (beta * 1e6)
+    alpha = cluster.flat.alpha_ms(world)
+    if cluster.per_peer_us > 0.0:
+        transfer = (wire / (cluster.flat.beta_gbps(1e12) * 1e6)
+                    + (world - 1) * cluster.per_peer_us / 1000.0)
+    else:
+        transfer = wire / (cluster.flat.beta_gbps(total_bytes / world) * 1e6)
+    p = cluster.combine_exponent
+    return alpha + transfer if p == 1.0 else (alpha ** p + transfer ** p) ** (1.0 / p)
 
 
 def validate_sweep(cluster, targets, label: str = "", verbose: bool = True):

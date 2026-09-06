@@ -218,6 +218,11 @@ claim("docs/05-simulator.md",
       "| quadrature | **{n}%** | **{n}%** | same as shipped |",
       lambda: [100 * v for v in _form_medians()], 0.4)
 
+claim("docs/05-simulator.md",
+      "| p = 1, additive, o = {n} us | {n}% | {n}% | {n}% | {n}% | {n}% | "
+      "| p = 2, overlap, o = {n} us | {n}% | {n}% | {n}% | {n}% | {n}% |",
+      lambda: _recalibration_table(), 0.006)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -318,6 +323,33 @@ def _form_medians():
                       exponents=(1.0, 2.0))
     return [a["additive (shipped)"]["median"], b["additive (shipped)"]["median"],
             a["quadrature"]["median"], b["quadrature"]["median"]]
+
+
+def _recalibration_table():
+    """The two calibrations of docs/05's decisive table, in the order it prints them."""
+    from sim.calibrate import (ALPHA_PTS, BETA_FAST, SECOND_ALPHA_PTS,
+                               supernode_under_form)
+    from sim.core import _interp
+    from sim.fit import fit_pinned_under_form
+    from sim.validate_micro import validate_micro
+    from sim.validate_sweep import (TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D,
+                                    validate_sweep)
+    aA = lambda w: _interp(sorted(dict(ALPHA_PTS).items()), float(w))
+    aB = lambda w: _interp(sorted(dict(SECOND_ALPHA_PTS).items()), float(w))
+    co = lambda tg: [(w, float(x), ms) for w, x, ms, _r in tg]
+    out = []
+    for p in (1.0, 2.0):
+        sh = fit_pinned_under_form(co(TARGETS_B), aB, p=p)
+        lv = fit_pinned_under_form(co(TARGETS_A), aA, p=p,
+                                   per_peer_us=sh["per_peer_us"])
+        a = supernode_under_form(p, sh["per_peer_us"], lv["beta_inf"], BETA_FAST)
+        b = supernode_under_form(p, sh["per_peer_us"], sh["beta_inf"],
+                                 alpha_pts=SECOND_ALPHA_PTS, ratio=1.0)
+        out.append(sh["per_peer_us"])
+        out.append(100 * validate_micro(a, verbose=False)[1]["median"])
+        for tg, sp in ((TARGETS_A, a), (TARGETS_B, b), (TARGETS_C, a), (TARGETS_D, a)):
+            out.append(100 * validate_sweep(sp, tg, verbose=False)[1]["median"])
+    return out
 
 
 def _chain_sweep_ms():

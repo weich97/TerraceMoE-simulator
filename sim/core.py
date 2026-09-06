@@ -89,6 +89,21 @@ class ClusterSpec:
     flat: Level
     splits_sync_ms: float = 0.044
     chain_us_per_row: float = 2.15 * 1000.0 / 24576.0   # = 0.0875 us/row, internal measurement records/flag
+    #: How a call's fixed cost combines with its transfer: t = (alpha^p + T^p)^(1/p).
+    #: 1.0 adds them, which is what every shipped constant was fitted under and what
+    #: the saturating beta table already expresses. 2.0 combines them in quadrature,
+    #: the reading in which the fixed cost overlaps the transfer instead of preceding
+    #: it. Anything other than 1.0 requires per_peer_us, because the identity that lets
+    #: a saturating beta stand in for a per-peer message cost holds only inside the
+    #: additive combination -- see calibrate.PER_PEER_MESSAGE_US.
+    #:
+    #: This is a parameter and not a decision: the repository's own corpora disagree
+    #: about it, and which value a machine wants is a property of that machine's
+    #: benchmark. docs/05 records what happened when both were calibrated properly.
+    combine_exponent: float = 1.0
+    #: Fixed cost per peer message [us], used only when combine_exponent != 1. With
+    #: it the beta tables must be flat, since saturation is then carried here instead.
+    per_peer_us: float = 0.0
 
     def ratio(self) -> float:
         """Fast/slow bandwidth ratio (taken at the 8 MB aligned operating point; for reporting)."""
@@ -164,7 +179,8 @@ class MoEGeometry:
 # ----------------------------------------------------------------------------
 
 def _a2a_ms(level: Level, world: int, total_rows: int, row_bytes: int,
-            self_fraction: float) -> float:
+            self_fraction: float, combine_exponent: float = 1.0,
+            per_peer_us: float = 0.0) -> float:
     """Wall clock of one a2a [ms].
 
     Of total_rows, self_fraction is self-copy (never crosses the link); the rest spreads
@@ -177,14 +193,31 @@ def _a2a_ms(level: Level, world: int, total_rows: int, row_bytes: int,
     wire_rows = total_rows * (1.0 - self_fraction)
     wire_bytes = wire_rows * row_bytes
     per_peer = wire_bytes / max(world - 1, 1)
-    beta = level.beta_gbps(per_peer)                       # GB/s
-    return level.alpha_ms(world) + wire_bytes / (beta * 1e6)   # bytes/(GB/s)=ns*... -> ms
+    alpha = level.alpha_ms(world)
+
+    # Two ways to say the same thing, and the choice is about representation, not
+    # about the combination rule. A saturating beta table carries the per-peer message
+    # cost implicitly -- that is an identity, see calibrate.PER_PEER_MESSAGE_US -- but
+    # only under addition, so a spec that means to use any other exponent must state
+    # the cost explicitly and keep its beta tables flat.
+    if per_peer_us > 0.0:
+        beta = level.beta_gbps(1e12)                        # flat table: beta_inf
+        transfer = wire_bytes / (beta * 1e6) + (world - 1) * per_peer_us / 1000.0
+    else:
+        beta = level.beta_gbps(per_peer)                    # GB/s
+        transfer = wire_bytes / (beta * 1e6)                # bytes/(GB/s)=ns*... -> ms
+
+    if combine_exponent == 1.0:
+        return alpha + transfer
+    return (alpha ** combine_exponent
+            + transfer ** combine_exponent) ** (1.0 / combine_exponent)
 
 
 def one_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
     """Vendor one-hop: a single full-fabric a2a. Self-copy share = 1/EP (uniform-routing expectation)."""
     return _a2a_ms(c.flat, g.ep, g.rows_one_hop(), g.row_bytes(),
-                   self_fraction=1.0 / g.ep)
+                   self_fraction=1.0 / g.ep,
+                   combine_exponent=c.combine_exponent, per_peer_us=c.per_peer_us)
 
 
 def hop_a_self_fraction(g: MoEGeometry) -> float:
@@ -212,9 +245,11 @@ def two_hop_call(c: ClusterSpec, g: MoEGeometry) -> float:
            one-hop) + the local arrival chain (per row).
     """
     a = _a2a_ms(c.slow, g.n_groups, g.rows_hop_a(), g.row_bytes(),
-                self_fraction=hop_a_self_fraction(g))
+                self_fraction=hop_a_self_fraction(g),
+                combine_exponent=c.combine_exponent, per_peer_us=c.per_peer_us)
     b = _a2a_ms(c.fast, g.R, g.rows_hop_b(), g.row_bytes(),
-                self_fraction=1.0 / g.R)
+                self_fraction=1.0 / g.R,
+                combine_exponent=c.combine_exponent, per_peer_us=c.per_peer_us)
     chain = c.chain_us_per_row * g.rows_hop_b() / 1000.0
     return a + b + c.splits_sync_ms + chain
 

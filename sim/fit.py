@@ -185,6 +185,62 @@ def fit_beta_pinned(records: list, alpha_of_world, seeds=(2e4, 2e5, 2e6)) -> dic
             "median_rel_err": err, "n": len(records)}
 
 
+def fit_pinned_under_form(records, alpha_of_world, p: float = 1.0,
+                          per_peer_us: float = None, seeds=(0.3, 1.0, 3.0)) -> dict:
+    """Fit the bandwidth level with alpha pinned, under a given combination rule.
+
+    This is ``fit_beta_pinned`` generalised to the exponent that decides whether a
+    call's fixed cost adds to its transfer or overlaps it:
+
+        t = (alpha^p + T^p)^(1/p),   T = wire/beta_inf + (world-1)*o
+
+    At p = 1 it is the shipped model, and o is x_half/beta_inf exactly, so the two
+    parameterisations are the same thing (calibrate.PER_PEER_MESSAGE_US). At any other
+    p they are not, because folding a per-peer cost into a bandwidth is an identity
+    only under addition -- which is why the exponent has to be chosen before the
+    constants are fitted rather than after.
+
+    ``per_peer_us`` supplied means the shape is borrowed and only the level is fitted,
+    which is the procedure calibrate.py describes: borrow the shape from the machine
+    with enough distinct sizes to resolve it, fit the level on the machine's own
+    corpus, never the other way round.
+
+    Records are (world, bytes, ms) triples or the rows ``load_records`` returns.
+    """
+    from scipy.optimize import least_squares
+    import numpy as np
+
+    rows = [(r[0], r[1], r[2]) if len(r) == 3 else (r[1], r[2], r[3])
+            for r in records]
+    W = np.array([w for w, _s, _t in rows], float)
+    S = np.array([s for _w, s, _t in rows], float)
+    y = np.array([t for _w, _s, t in rows], float)
+    A = np.array([alpha_of_world(w) for w in W], float)
+    wire = S * (W - 1) / W
+    borrow = per_peer_us is not None
+
+    def model(q):
+        o = per_peer_us if borrow else q[1]
+        T = wire / (q[0] * 1e6) + (W - 1) * o / 1000.0
+        return (A ** p + T ** p) ** (1.0 / p)
+
+    lo = [1.0] + ([] if borrow else [0.0])
+    hi = [4000.0] + ([] if borrow else [100.0])
+    best = None
+    for seed in seeds:
+        q0 = [110.0] + ([] if borrow else [seed])
+        r = least_squares(lambda q: (model(q) - y) / y, q0, bounds=(lo, hi),
+                          max_nfev=60000)
+        e = float(np.median(np.abs((model(r.x) - y) / y)))
+        if best is None or e < best[1]:
+            best = (r.x, e)
+    q, e = best
+    o = per_peer_us if borrow else float(q[1])
+    return {"beta_inf": float(q[0]), "per_peer_us": o, "p": p,
+            "x_half": (o * float(q[0]) * 1e3 if p == 1.0 else None),
+            "median_rel_err": e, "n": len(rows)}
+
+
 def compare_forms(records, exponents=(1.0, 2.0, None)) -> dict:
     """Does a collective's fixed cost ADD to its transfer, or OVERLAP with it?
 

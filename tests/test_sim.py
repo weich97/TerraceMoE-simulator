@@ -823,6 +823,79 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
+def test_the_two_benchmark_families_want_different_model_forms():
+    """Recalibrate the whole model under each rule, then run every gate. The decisive test.
+
+    Fitting one form better than another proves nothing on its own, and the earlier
+    checks were not a fair trial: they pinned a held-out alpha calibrated under no
+    particular form, or refitted only the bandwidth pair to the Tier-1 targets. This
+    runs the procedure calibrate.py actually describes, identically for both rules --
+    alpha measured and pinned, the shape borrowed from the machine with enough
+    distinct sizes to resolve it, the level fitted on the machine's own corpus -- and
+    then scores all five gates.
+
+    The harness is checked before it is trusted: at p = 1 it must recover the shipped
+    constants, and it does, to the digit on x_half and machine B's beta.
+
+    The verdict is a split, and the split is the finding. The overlap rule is clearly
+    better on the two large size-sweep corpora and clearly worse on Tier-1, which
+    belongs to the other benchmark family. So the two families disagree about what a
+    collective costs, not merely about how much. Nothing offline can adjudicate that;
+    one run of both benchmark styles at the same world over the same sizes would.
+    """
+    from sim.calibrate import (ALPHA_PTS, BETA_FAST, SECOND_ALPHA_PTS,
+                               SECOND_BETA_FLAT, X_HALF_FLAT, supernode_under_form)
+    from sim.core import _interp
+    from sim.fit import fit_pinned_under_form
+    from sim.validate_micro import validate_micro
+    from sim.validate_sweep import (TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D,
+                                    validate_sweep)
+
+    alpha_a = lambda w: _interp(sorted(dict(ALPHA_PTS).items()), float(w))
+    alpha_b = lambda w: _interp(sorted(dict(SECOND_ALPHA_PTS).items()), float(w))
+    corpus = lambda tg: [(w, float(s), ms) for w, s, ms, _r in tg]
+
+    scored = {}
+    for p in (1.0, 2.0):
+        shape = fit_pinned_under_form(corpus(TARGETS_B), alpha_b, p=p)
+        level = fit_pinned_under_form(corpus(TARGETS_A), alpha_a, p=p,
+                                      per_peer_us=shape["per_peer_us"])
+        a = supernode_under_form(p, shape["per_peer_us"], level["beta_inf"], BETA_FAST)
+        b = supernode_under_form(p, shape["per_peer_us"], shape["beta_inf"],
+                                 alpha_pts=SECOND_ALPHA_PTS, ratio=1.0)
+        _ok, t1 = validate_micro(a, verbose=False)
+        row = {"tier1": t1["median"], "shape": shape, "level": level}
+        for lab, tg, sp in (("A", TARGETS_A, a), ("B", TARGETS_B, b),
+                            ("C", TARGETS_C, a), ("D", TARGETS_D, a)):
+            _o, i = validate_sweep(sp, tg, verbose=False)
+            row[lab] = i["median"]
+        scored[p] = row
+
+    # the harness reproduces the shipped calibration at p = 1 before anything is
+    # concluded from p = 2
+    add = scored[1.0]
+    assert add["shape"]["x_half"] == pytest.approx(X_HALF_FLAT, rel=0.02), (
+        "at p=1 this procedure must recover the shipped x_half of 54 KiB, not %.0f KiB"
+        % (add["shape"]["x_half"] / 1024))
+    assert add["shape"]["beta_inf"] == pytest.approx(SECOND_BETA_FLAT, rel=0.02)
+
+    ovl = scored[2.0]
+    # the split: the size-sweep family prefers the overlap rule, clearly
+    assert ovl["B"] < add["B"] * 0.75, "corpus B: %.3f against %.3f" % (ovl["B"], add["B"])
+    assert ovl["C"] < add["C"] * 0.75, "corpus C: %.3f against %.3f" % (ovl["C"], add["C"])
+    # and the family Tier-1 comes from prefers the additive one, just as clearly
+    assert ovl["tier1"] > add["tier1"] * 1.5, (
+        "Tier-1: %.3f against %.3f -- if the overlap rule stops hurting the blind "
+        "gate, the split this repository records has changed and the form question "
+        "is open again" % (ovl["tier1"], add["tier1"]))
+    # corpus D fails under both: it is a drift probe on alpha(8), not a form question
+    assert ovl["D"] > 0.12 and add["D"] > 0.12
+
+    # and the shipped model is still the additive one
+    from sim.calibrate import flat_supernode
+    assert flat_supernode().combine_exponent == 1.0
+
+
 def test_the_overlap_form_fits_better_and_is_still_not_adopted():
     """A rejected model form, pinned so the road is not walked twice.
 
