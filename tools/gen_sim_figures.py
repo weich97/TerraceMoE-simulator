@@ -182,24 +182,16 @@ plt.close(fig)
 # 256 or 512 except one dataset that sits 5x below every other in absolute
 # bandwidth and that the cost model fits worst -- so past 128 ranks the curve is
 # drawn as a band over four defensible treatments of alpha, not as a line.
-ALPHA_TREATMENTS = {
-    "same-corpus refit": {256: 0.425, 512: 2.888},
-    "borrowed points (previously shipped)": {256: 0.735, 512: 1.859},
-    "no growth past 128": {256: 0.378, 512: 0.378},
-    "linear in peers past 128": {256: 0.378 + 0.0107 * 128,
-                                 512: 0.378 + 0.0107 * 384},
-}
-MEASURED_W = [32, 64, 128]
-EXTRAP_W = [128, 256, 512]
+from sim.uncertainty import (ALPHA_TREATMENTS, EXTRAP_WORLDS,  # noqa: E402
+                             MEASURED_WORLDS, scale_ratio)
+
+MEASURED_W = list(MEASURED_WORLDS)
+EXTRAP_W = list(EXTRAP_WORLDS)
 
 
 def _scale_ratio(alpha_pts, w):
-    c = synthetic(3.2, chain_us_per_row=CHAIN_SCENARIOS[1][1])
-    for lvl in (c.fast, c.slow, c.flat):
-        lvl.alpha_pts = alpha_pts
-    g = MoEGeometry(name="scale", n_groups=w // 8, R=8, k=6, M=2,
-                    seq=4096, mbs=1, gbs=w * 4096)
-    return one_hop_call(c, g) / two_hop_call(c, g)
+    """The one named construction; see sim/uncertainty.py::scale_ratio."""
+    return scale_ratio(w, alpha_pts)
 
 
 base_alpha = dict(synthetic(3.2).fast.alpha_pts)

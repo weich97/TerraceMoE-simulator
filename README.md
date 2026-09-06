@@ -202,21 +202,21 @@ because two-hop converges to one-hop's traffic while keeping its extra costs.
 Through 128 ranks every defensible treatment of `alpha` agrees to the digit. Past
 that, the only corpus covering worlds 256 and 512 sits five times below every other
 in absolute bandwidth and fits worst by a factor of four, so the figure plots the
-band across four treatments instead of a line. At 512 ranks they span 1.37 to 2.94
-and the direction of the trend flips, which is why this repository makes no claim
-about clusters past 128 ranks.
+band across four treatments instead of a line. At 512 ranks they span 1.63 to 3.12,
+a 1.9x spread produced by the choice between four treatments of one unmeasured
+constant, which is why this repository makes no claim about clusters past 128 ranks.
 
 ## Repository layout
 
 | Path | Contents | Status |
 |---|---|---|
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
-| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 320 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
+| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 366 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
 | `sim/` | Cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the target checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b gates passed** (4.1% median on C1; 1.9%/9.3%/8.0% on C2-C4, with C3 a same-corpus B fit and C4 the post-freeze A holdout); a world-8 drift probe fails and is not retuned. Tier-2 fails, so step-level extrapolation is banned. |
 | `sim/machine.py`, `sim/codesign.py`, `sim/envelope.py`, `sim/archsearch.py`, `sim/record.py` | Co-design layer: the same cost terms turned around — which architectures a machine runs well. Machine/implementation descriptors, per-architecture step breakdown, the model-size band a cluster is good at, a capacity-constrained architecture search, and the one controlled comparison the published record permits (`python -m sim.codesign` / `sim.envelope` / `sim.archsearch` / `sim.record`) | Chain model reproduces its calibration sweeps (2.9% worst case, tests pin it); **residency is unmeasured** and every verdict it touches says so ([docs/11](docs/11-residency-measurement.md)); the group-cap table is synthetic sensitivity ([docs/12](docs/12-m-quality-experiment.md)); both record checks hold, and the record cannot locate the lower edge ([docs/13](docs/13-published-mfu-record.md)) |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
-| `tests/` | 320 tests, pure CPU (no NPU needed) | All green |
+| `tests/` | 366 tests, pure CPU (no NPU needed); `test_docs_numbers.py` recomputes every derived number these docs state, and `test_cli_output_portable.py` runs each documented command against a console that cannot encode anything but ASCII | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |
 | `docs/` | Design docs ×5, the routing constraint explained (docs/10), full ablation results (docs/06), the Tier-2 campaign (docs/07), the one-sided verdict (docs/08), the phase model with the measurement that would calibrate it (docs/09), the residency-measurement protocol (docs/11), the preregistered group-cap experiment (docs/12), and the published-MFU literature sweep with its verdict (docs/13); figures-first | — |
 | `tools/gen_figures.py` | Result-figure generation (numbers embedded; figures reproducible) | — |
@@ -226,7 +226,7 @@ about clusters past 128 ranks.
 ## Running the tests
 
 ```
-python -m pytest tests/ -q        # torch only, runs on CPU, about 70 seconds
+python -m pytest tests/ -q        # torch only, runs on CPU, about three minutes
 python -m sim.validate_micro      # simulator Tier-1 validation gate
 python -m sim.sweep               # cross-cluster extrapolation (gate checked at entry; all output labeled "simulated")
 ```

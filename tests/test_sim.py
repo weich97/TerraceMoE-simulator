@@ -143,7 +143,7 @@ def test_overlap_family_structure_pins():
     res = evaluate(flat_supernode(), verbose=False)
     assert res["M4"]["signs_ok"] == 5 and 0.035 <= res["M4"]["mae"] <= 0.07
     assert res["M2"]["signs_ok"] < 5 and res["M2"]["mae"] <= 0.08
-    assert res["M0"]["mae"] >= 0.10   # failure magnitude of the naive baseline (~0.135)
+    assert res["M0"]["mae"] >= 0.10   # failure magnitude of the naive baseline (~0.140)
     # MAE snapshot pin for the docs/07 §1 table (±0.005): any move in the calibration
     # constants turns this red, a reminder to re-issue the docs/07 table in step
     # (review found a loose pin failed to catch a 20% drift in the arrival-chain constant)
@@ -214,23 +214,21 @@ def test_geometry_grid_bounds():
 # ---------------------------------------------------------------- scale honesty
 
 
+# One construction, three consumers: this test, the F10 figure and the scale claims in
+# docs/05 all read sim.uncertainty.scale_ratio. They used to hold three copies of it,
+# and the copy in the prose went stale through two recalibrations without anything
+# noticing (docs/05, correction note 2026-09-05).
 def _scale_ratio(alpha_pts, w, ratio=3.2):
-    from sim.core import MoEGeometry, one_hop_call, two_hop_call
-    from sim.sweep import CHAIN_SCENARIOS
-    c = synthetic(ratio, chain_us_per_row=CHAIN_SCENARIOS[1][1])
-    for lvl in (c.fast, c.slow, c.flat):
-        lvl.alpha_pts = alpha_pts
-    g = MoEGeometry(name="scale", n_groups=w // 8, R=8, k=6, M=2,
-                    seq=4096, mbs=1, gbs=w * 4096)
-    return one_hop_call(c, g) / two_hop_call(c, g)
+    from sim.uncertainty import scale_ratio
+    return scale_ratio(w, alpha_pts, ratio)
 
 
-ALPHA_TREATMENTS = [
-    {256: 0.425, 512: 2.888},                          # refit of the same corpus
-    {256: 0.735, 512: 1.859},                          # the shipped entries
-    {256: 0.378, 512: 0.378},                          # no growth past 128
-    {256: 0.378 + 0.0107 * 128, 512: 0.378 + 0.0107 * 384},   # linear in peers
-]
+def _alpha_treatments():
+    from sim.uncertainty import ALPHA_TREATMENTS as T
+    return list(T.values())
+
+
+ALPHA_TREATMENTS = _alpha_treatments()
 
 
 def test_conclusions_hold_only_up_to_world_128():

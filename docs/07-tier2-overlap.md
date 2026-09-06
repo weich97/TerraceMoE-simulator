@@ -102,7 +102,12 @@ while the holdout points need a machine allocation at target scale.
 ## 4. Relation to the other docs
 
 - Communication-level extrapolation (Tier-1, unlocked) is unaffected by this doc — the
-  bandwidth ledger is validated separately at the micro level (docs/05, median error 8.1%).
+  bandwidth ledger is validated separately at the micro level (docs/05, Tier-1 median error
+  4.1%).
 - This doc's negative result is confined to "step-level synthesis": do **not** treat the
   communication-level ratios of docs/05 as end-to-end speedups — that is exactly M0's mistake
-  (MAE 0.135).
+  (MAE 0.140, the first row of the table in §1).
+
+*(Both figures in this section were corrected on 2026-09-05: they read 8.1% and 0.135, the
+values from before the Hop-A self-copy fix, while §1 of this same page already carried the
+current 0.140. `tests/test_docs_numbers.py` now reads both out of this file.)*

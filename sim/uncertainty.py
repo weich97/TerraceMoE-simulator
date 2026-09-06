@@ -104,6 +104,89 @@ def breakeven_ratio(chain: float, q: int = 3, tok: int = 4096,
     return hi
 
 
+# ---------------------------------------------------------------------------
+# The scale axis, as one named construction
+# ---------------------------------------------------------------------------
+
+#: The four defensible treatments of the two alpha entries no corpus constrains.
+#: alpha is direct-measured at worlds 8, 16 and 128. Nothing in the corpus measures
+#: 256 or 512 except the one dataset sitting ~5x below every other in absolute
+#: bandwidth and fitting worst, so past 128 ranks the answer is a band over these
+#: four treatments rather than a line.
+ALPHA_TREATMENTS = {
+    "same-corpus refit": {256: 0.425, 512: 2.888},
+    "borrowed points (previously shipped)": {256: 0.735, 512: 1.859},
+    "no growth past 128": {256: 0.378, 512: 0.378},
+    "linear in peers past 128": {256: 0.378 + 0.0107 * 128,
+                                 512: 0.378 + 0.0107 * 384},
+}
+
+#: Hierarchy ratio held fixed while the cluster grows, and the worlds whose alpha
+#: was measured directly. Below 128 every treatment agrees to the digit, which is
+#: what makes those three points quotable and the ones past them not.
+SCALE_HIERARCHY_RATIO = 3.2
+MEASURED_WORLDS = (32, 64, 128)
+EXTRAP_WORLDS = (128, 256, 512)
+
+
+def scale_ratio(w: int, alpha_pts=None, ratio: float = SCALE_HIERARCHY_RATIO,
+                chain: float = None) -> float:
+    """one-hop/two-hop at world ``w`` on the fused tier, hierarchy ratio held fixed.
+
+    This is the single construction behind the scale figure (F10), the scale claims in
+    docs/05 and the honesty test in tests/test_sim.py. It used to be copied into each
+    of them separately, and the prose copy silently went stale through two
+    recalibrations while the generated figure stayed correct; see the 2026-09-05
+    correction note in docs/05.
+    """
+    from .calibrate import ALPHA_PTS
+    if chain is None:
+        from .sweep import CHAIN_SCENARIOS
+        chain = CHAIN_SCENARIOS[1][1]          # hypothetical fused target
+    c = synthetic(ratio, chain_us_per_row=chain)
+    pts = sorted(dict(ALPHA_PTS).items()) if alpha_pts is None else alpha_pts
+    for lvl in (c.fast, c.slow, c.flat):
+        lvl.alpha_pts = pts
+    g = MoEGeometry(name="scale", n_groups=w // 8, R=8, k=6, M=2,
+                    seq=4096, mbs=1, gbs=w * 4096)
+    return one_hop_call(c, g) / two_hop_call(c, g)
+
+
+def scale_treatment_curves(worlds=EXTRAP_WORLDS) -> dict:
+    """{treatment label: [ratio at each world]}, one curve per alpha treatment."""
+    from .calibrate import ALPHA_PTS
+    base = dict(ALPHA_PTS)
+    return {lab: [scale_ratio(w, sorted({**base, **ov}.items())) for w in worlds]
+            for lab, ov in ALPHA_TREATMENTS.items()}
+
+
+def scale_band(w: int = 512) -> tuple:
+    """(lo, hi) of the ratio at world ``w`` across the four alpha treatments.
+
+    The spread is the whole reason this repository claims nothing past 128 ranks: it
+    is produced by the choice between four treatments of one unmeasured constant, not
+    by anything measured.
+    """
+    vals = [c[list(EXTRAP_WORLDS).index(w)] for c in scale_treatment_curves().values()]
+    return min(vals), max(vals)
+
+
+def geometry_breakeven_spread(chain: float) -> float:
+    """Largest breakeven displacement (k, M) produces at a fixed (group count, R).
+
+    The geometry axis of the three-axis ranking in docs/05. Taken at fixed world so it
+    measures the routing shape alone, with the scale axis held out of it.
+    """
+    rows = geometry_grid(chain)
+    worst = 0.0
+    for ng in (8, 16, 32):
+        for R in (4, 8, 16):
+            sub = [be for (a, b, _k, _m, be) in rows if a == ng and b == R]
+            if sub:
+                worst = max(worst, max(sub) - min(sub))
+    return worst
+
+
 def heatmap(chain: float, q: int = 3,
             ratios=(1.03, 1.5, 2, 3, 4.5, 6, 8, 11, 16),
             toks=(512, 1024, 2048, 4096, 8192, 16384)):

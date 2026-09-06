@@ -124,19 +124,35 @@ Two robustness anchors:
 ![scale effects](assets/f10-scale-alpha.svg)
 
 Fix hierarchy ratio 3.2 and the fused tier, and scale the cluster up. Through **128 dies** the
-answer is solid: 1.68 → 1.52 → 1.47 at 32 / 64 / 128, and those three numbers are *identical to
+answer is solid: 1.50 → 1.47 → 1.51 at 32 / 64 / 128, and those three numbers are *identical to
 the digit* under every defensible treatment of α, because they use only the worlds we measured
-directly (8, 16, 128).
+directly (8, 16, 128). Read the shape as well as the digits: below 128 dies the ratio is **flat**,
+not rising and not falling, so scale buys nothing here on its own.
 
 **Past 128 dies this repository makes no claim.** An audit of every size sweep we own (331
 usable a2a points, four datasets, two machines) found that the single corpus covering worlds
 256 and 512 is also the corpus whose absolute bandwidth sits ~5× below all the others and which
 the cost model fits worst — 40% median relative error, against 5–11% everywhere else. Push four
 defensible treatments of those two α entries through the extrapolation and the 512-die ratio
-lands anywhere in **1.37 – 2.94**, with the *direction of the trend flipping* between them
-(under "no growth past 128" the ratio falls from 1.47 to 1.37). The figure plots that band
+lands anywhere in **1.63 – 3.12**, a **1.9× spread** produced entirely by the choice between
+four treatments of one unmeasured constant. The figure plots that band
 rather than a line, and `tests/test_sim.py` pins both halves: insensitivity below 128, and a
-≥2× spread at 512 so the claim cannot be quietly re-hardened.
+≥1.8× spread at 512 so the claim cannot be quietly re-hardened.
+
+> **Correction (2026-09-05).** This paragraph and the one above previously read
+> 1.68 → 1.52 → 1.47 below 128 and **1.37 – 2.94** at 512, and said the direction of the
+> trend *flipped* between treatments, quoting a fall from 1.47 to 1.37 under "no growth
+> past 128". None of that reproduces from the shipped code. The figure beside this text
+> has been printing the correct 1.50 / 1.47 / 1.51 and 1.63 – 3.12 all along, because it is
+> generated; the prose was not, and it survived two recalibrations that moved the numbers
+> underneath it. The direction no longer flips: all four treatments now rise from 128 to
+> 512 (1.51 → 1.63, 2.17, 2.54, 3.12). **The refusal to claim anything past 128 dies is
+> unchanged, but it now rests on the spread alone, not on a disagreement about direction.**
+> The construction now lives in one place, `sim.uncertainty.scale_ratio`, which the
+> figure, `tests/test_sim.py` and this page all read; it had been copied into each of
+> them separately, which is how one copy could go stale unnoticed.
+> `tests/test_docs_numbers.py` reads these numbers back out of this file and recomputes
+> them, so prose and code cannot part company again.
 
 What survives is the mechanism, not the magnitude: two-hop's large-cluster upside is bought
 with α(world) — one-hop pays α at the full world while two-hop pays α at two much smaller
@@ -147,8 +163,12 @@ Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.g
 is consistent with that mechanism, and carries the same caveat wherever it reaches past 128.
 Ranking the three axes by how far they actually move breakeven (fused tier): **implementation
 tier largest** (3.98 → 1.10, Δ≈2.9) > scale axis (Δ≤1.9, and only the ≤128 part of it is
-trustworthy) > geometry axis ((k,M) moves up to 0.53 at fixed world; under the PyTorch tier the
-geometry axis widens to 1.62, but the ordering stands).
+trustworthy) > geometry axis ((k,M) moves the breakeven by up to 0.70 at fixed world). The two
+smaller axes are not measured in the same units: the geometry figure is a breakeven
+displacement, while the scale figure is the 1.9× span of the 512-die band. Under the PyTorch
+tier the geometry axis widens to 1.91, so at that tier it is no longer clearly the smallest of
+the three; the fused-tier ordering above is the one that stands. (Corrected 2026-09-05 from
+0.53 and 1.62, which predate the Hop-A self-copy fix.)
 
 ## Calibration audit: what 331 measured points say about the constants
 
@@ -176,8 +196,9 @@ level keeps a flat β, because its value is physics-endorsed (link aggregation,
 
 After correcting Hop A's local-group fraction from M/N_g to 1/N_g, the current result is
 **Tier-1 median error 4.1%** (worst 24.5%, still
-inside the 35% gate), and the entire bootstrap interval of x_half passes it (30 KiB → 2.5%,
-87 KiB → 5.0%). Tier-1b then confirms the model on 64 targets from a different benchmark
+inside the 35% gate), and the entire bootstrap interval of x_half passes it (30 KiB → 4.0%,
+87 KiB → 4.6%; corrected 2026-09-05 from 2.5% and 5.0%, which were the pre-correction
+medians). Tier-1b then confirms the model on 64 targets from a different benchmark
 family across two machines. The
 extrapolated ratios move up 4–5% — two-hop's messages are larger per peer, so it
 suffers less from saturation than one-hop does.
