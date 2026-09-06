@@ -42,6 +42,7 @@ CLI_MODULES = [
     "sim.archsearch",
     "sim.record",
     "sim.hostregime",
+    "sim.hierarchy",
 ]
 
 # tools/breakeven.py branches on the ratio it is given, and each branch prints its own

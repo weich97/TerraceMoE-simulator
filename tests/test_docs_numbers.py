@@ -232,6 +232,17 @@ claim("docs/05-simulator.md",
       "0.114 ms at world 8 and {n} at world 16",
       lambda: [_regime_alpha()[16]], 0.001)
 
+# -- docs/03: the measured rack boundary ------------------------------------
+
+claim("docs/03-applicability.md",
+      "delivers {n} GB/s within a rack and {n} across, a **measured hierarchy ratio "
+      "of {n}**",
+      lambda: [_rack()[0], _rack()[1], _rack()[2]], 0.6)
+
+claim("docs/03-applicability.md",
+      "puts the pure tiers at {n} against {n} GB/s, a ratio of {n}.",
+      lambda: [_rack()[3], _rack()[4], _rack()[5]], 0.6)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -376,6 +387,14 @@ def _regime_alpha():
     from sim.hostregime import compare_styles
     return {w: round(v, 3)
             for w, v in compare_styles()["burst"]["quadrature"]["alpha"].items()}
+
+
+def _rack():
+    """within GB/s, across GB/s, ratio, tier within, tier across, tier ratio."""
+    from sim.hierarchy import hierarchy_ratio, marginal_gbps, remote_tier_gbps
+    tw, ta = remote_tier_gbps("within"), remote_tier_gbps("across")
+    return [marginal_gbps("within", "percall"), marginal_gbps("across", "percall"),
+            hierarchy_ratio(), tw, ta, tw / ta]
 
 
 def _chain_sweep_ms():

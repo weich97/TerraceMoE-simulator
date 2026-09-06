@@ -13,7 +13,16 @@ registry is what makes the coverage visible -- including its gaps.
 
 ## Coverage today
 
-Only platform A has a measured hierarchy ratio, 1.03.  Platform B contributes a
+Platform A's ratio of 1.03 is measured **inside one rack**, which is where every
+end-to-end verdict in docs/03 was taken and where the machine is genuinely flat. The
+same machine has a boundary above that: it is two racks, and crossing between them was
+measured on 2026-09-06 at a ratio of **2.55** (`sim/hierarchy.py`). That is the first
+measured ratio in this repository above 1.03, it clears the byte criterion at every
+quota, and it lands between the fused and the operator-chain effective thresholds -- so
+on that boundary the arrival chain decides. It is not an end-to-end verdict: expert
+parallelism across two racks is 256 cards and alpha above world 128 is unsupported.
+
+Platform B contributes a
 same-corpus fit/consistency check after machine-specific refitting, but its corpus
 does not separate the fast and slow levels, so its hierarchy ratio is unresolved.
 Nothing here has been calibrated against a machine where the fast side is several
@@ -189,9 +198,13 @@ def main() -> None:
           % (c["n_platforms"], c["targets_total"], c["n_ratio_measured"],
              c["ratio_min"], c["ratio_max"]))
     if not c["spans_hierarchical"]:
-        print("**No measured ratio above 1.5.** Every statement beyond 1.03 is a")
-        print("synthetic sensitivity; that gap closes only by calibrating a target")
-        print("in the hierarchical regime.")
+        from .hierarchy import hierarchy_ratio
+        print("**No registered platform has a ratio above 1.5.** The synthetic rows")
+        print("below are sensitivities, not predictions. One measured point does now")
+        print("exist off this registry: the same machine's rack boundary, at %.2f"
+              % hierarchy_ratio())
+        print("(sim/hierarchy.py). It is a measured ratio, not a calibrated platform --")
+        print("alpha past world 128 is unsupported, so it is not registered here.")
 
     rows = platform_map()
     bes = rows[0]["breakevens"]

@@ -823,6 +823,57 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
+def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
+    """The measured hierarchy ratio, and where it places.
+
+    Every ratio above 1.03 in this repository was a synthetic sensitivity. The machine
+    the flat verdict was taken on is two racks, the seven end-to-end geometries all ran
+    inside one of them, and crossing between them had never been measured. It has been
+    now: two all-to-alls of identical structure differing only in whether the remote
+    peers are in the same rack.
+    """
+    from sim.hierarchy import (CARDS_PER_RACK, MEASURED, RATIO_BURST, RATIO_PERCALL,
+                               byte_breakeven_at_rack, hierarchy_ratio,
+                               marginal_gbps, placement, remote_tier_gbps)
+    from sim.hostregime import MEASURED as REGIME
+
+    assert len(MEASURED) == 23
+
+    # the two modules must be describing the same run: hierarchy's within-rack columns
+    # are hostregime's world-16 rows, to the digit
+    w16 = [(r[1], r[2], r[3]) for r in REGIME if r[0] == 16]
+    assert len(w16) == len(MEASURED)
+    for (b, burst, percall), row in zip(w16, sorted(MEASURED)):
+        assert row[0] == b and row[1] == burst and row[2] == percall
+
+    # the ratio, and it does not depend on the timing style or on how many points the
+    # regression uses -- which is what makes it a property of the boundary
+    assert hierarchy_ratio("percall") == pytest.approx(RATIO_PERCALL, abs=0.02)
+    assert hierarchy_ratio("burst") == pytest.approx(RATIO_BURST, abs=0.02)
+    assert abs(hierarchy_ratio("burst") - hierarchy_ratio("percall")) < 0.05
+    for n in (3, 4, 5, 6):
+        assert 2.4 < hierarchy_ratio("percall", n) < 2.7
+
+    # within a rack the machine is the flat one this repository already measured;
+    # across racks it is not
+    assert marginal_gbps("within", "percall") == pytest.approx(102, abs=2)
+    assert marginal_gbps("across", "percall") == pytest.approx(40, abs=2)
+    assert remote_tier_gbps("within") / remote_tier_gbps("across") == pytest.approx(
+        3.54, abs=0.1)
+
+    # it clears the byte criterion at every quota, with a whole rack as the fast domain
+    assert CARDS_PER_RACK == 128
+    for q in range(2, 9):
+        assert hierarchy_ratio() > byte_breakeven_at_rack(q)
+
+    # and lands between the two implementation thresholds, which is the finding: the
+    # topology is good enough and the arrival chain is what decides
+    p = placement()
+    assert p["clears"]["hypothetical fused target"]
+    assert not p["clears"]["PyTorch chain (measured)"]
+    assert p["decided_by_the_chain"]
+
+
 def test_the_host_regime_decides_which_rule_a_collective_obeys():
     """The measurement that closed the open question, pinned.
 
