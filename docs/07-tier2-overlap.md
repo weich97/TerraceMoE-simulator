@@ -108,6 +108,12 @@ while the holdout points need a machine allocation at target scale.
   communication-level ratios of docs/05 as end-to-end speedups — that is exactly M0's mistake
   (MAE 0.140, the first row of the table in §1).
 
-*(Both figures in this section were corrected on 2026-09-05: they read 8.1% and 0.135, the
-values from before the Hop-A self-copy fix, while §1 of this same page already carried the
-current 0.140. `tests/test_docs_numbers.py` now reads both out of this file.)*
+*(Both figures in this section were corrected on 2026-09-05, and they were wrong in two
+different ways. The Tier-1 median read 8.1%, the value from before the Hop-A self-copy fix.
+The M0 figure read 0.135, which was never M0's MAE at any calibration: **0.135 is the
+Tier-2 gate's** MAE over the same six holdouts, which is a different quantity, because that
+row back-solves one combine constant on the calibration geometry while M0 fits nothing.
+§1 of this page already carried M0's own 0.140. Two numbers this close, describing two
+models this similar, are exactly the pair worth keeping apart.
+`tests/test_docs_numbers.py` now reads both out of this file and recomputes each from the
+module that owns it.)*

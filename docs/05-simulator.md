@@ -100,6 +100,37 @@ One-sentence takeaway: in this sensitivity study, the implementation tier moves 
 breakeven from 3.98 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
 lands on either side is unresolved until its effective ratio and call costs are measured.
 
+### The threshold is not flat in hidden width
+
+The breakeven above is stated at H = 2048, because that is where the arrival chain was
+calibrated, and the chain is not independent of H. Sweeping the operator chain over hidden
+widths at a fixed 24576 rows measures 2.37, 2.51, 2.85 and 3.79 ms at H of 1024, 2048, 4096
+and 8192. Over that fourfold widening the chain grows by 1.51 while the payload every
+collective carries grows by four, so moving H in both places at once lowers the threshold:
+
+| hidden width | 1024 | 2048 | 4096 | 8192 |
+|---|---:|---:|---:|---:|
+| effective breakeven, measured chain | 5.95 | **3.98** | 2.89 | 2.40 |
+
+Reproduce with `sim.uncertainty.breakeven_vs_hidden_width`. `sim/machine.py::chain_us_per_row_at`
+takes the *shape* from that sweep and the *level* from the calibration, so the H = 2048 column
+is exactly the 3.98 above and no other figure in this repository moves. The sweep's own
+H = 2048 point is 2.51 ms against the calibration's 2.15, a gap inside the documented
+run-to-run drift; adopting the sweep's level instead would put the reference threshold at
+4.46. Both readings are defensible and the choice has to be made rather than arrived at by
+mixing the two, which is what the function exists to prevent.
+
+The direction is settled by the limit rather than by any constant: every wire term scales
+exactly with H while α and the splits exchange do not, so at large H the comparison
+approaches the byte-only one and the threshold falls toward it. The reference architecture
+priced in [docs/12](12-m-quality-experiment.md) has H = 7168, well above the width the
+threshold is stated at, so **a threshold quoted at 2048 over-prices the arrival chain — and
+only two-hop pays it**. That bias runs against the method this repository proposes, which
+makes 3.98 the conservative end of the range rather than the flattering one. An earlier
+version of this analysis scaled the chain with H while holding the payload at the reference
+width and had the sign of the effect backwards; `tests/test_codesign.py` now pins the
+direction as well as the digits.
+
 ### Uncertainty bands: is the conclusion stable against calibration error?
 
 ![uncertainty bands](assets/f9-uncertainty.svg)

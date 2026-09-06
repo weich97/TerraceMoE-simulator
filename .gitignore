@@ -18,6 +18,11 @@ paper/main.pdf
 # Paper source is kept locally and managed in Overleaf, not in this repository.
 paper/
 
+# Checks against documents this repository does not ship. Quoting their text here
+# would put it in a public repository by the back door; see the docstring in
+# tests/test_docs_numbers.py::_load_local_claims.
+tests/local_claims.py
+
 # Overleaf staging and the built package. Paper material, same rule as paper/.
 output/
 

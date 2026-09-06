@@ -78,6 +78,55 @@ def test_fused_chain_brackets_the_design_target():
     assert NO_CHAIN.ns_per_row(2048, a) == 0.0
 
 
+def test_chain_cost_at_the_reference_width_is_the_shipped_constant():
+    """The hidden-width shape must not move the level every other figure is stated at.
+
+    Two measurements of the chain disagree by the documented run-to-run drift: 2.15 ms
+    at 24576 rows in the calibration, 2.51 ms at the same rows in the hidden-width
+    sweep. The sweep is the only one that resolves the shape in H, so the shape is
+    taken from it and the level from the calibration. If that ever stops holding, the
+    reference threshold of 3.98 silently becomes 4.46 -- a defensible reading of the
+    same data, but a different one, and not something to arrive at by accident.
+    """
+    from sim.calibrate import CHAIN_US_PER_ROW
+    from sim.machine import CHAIN_H_SWEEP_MS, chain_us_per_row_at
+    assert chain_us_per_row_at(2048) == pytest.approx(CHAIN_US_PER_ROW, rel=1e-12)
+
+    costs = [chain_us_per_row_at(H) for H in sorted(CHAIN_H_SWEEP_MS)]
+    assert costs == sorted(costs), "the chain cannot fall as hidden width grows"
+    # over the fourfold range the payload rises by 4 and the chain by 1.51, which is
+    # the whole reason the threshold falls with H
+    assert costs[3] / costs[1] == pytest.approx(1.51, abs=0.005)
+
+    with pytest.raises(ValueError):
+        chain_us_per_row_at(3072)   # between measured points: refuses to interpolate
+
+
+def test_breakeven_falls_with_hidden_width():
+    """The effective threshold is not flat in H, and it falls rather than rises.
+
+    An earlier revision of this analysis scaled the chain with H while holding the
+    payload at the reference width, which has the sign of the effect backwards. The
+    limit settles the direction without reference to any constant: every wire term
+    scales exactly with H while alpha and the splits exchange do not, so at large H
+    the comparison approaches the byte-only one and the threshold falls toward it.
+
+    The direction matters because it runs against this repository's own proposal.
+    Contemporary MoE models all sit above the reference width, so a threshold quoted
+    at 2048 over-prices the arrival chain, and only two-hop pays it.
+    """
+    from sim.uncertainty import breakeven_vs_hidden_width
+    rows = breakeven_vs_hidden_width()
+    assert [H for H, _ in rows] == [1024, 2048, 4096, 8192]
+    bes = [b for _H, b in rows]
+    assert bes == sorted(bes, reverse=True), (
+        "the threshold must fall as hidden width grows, got %s" % bes)
+    for (H, got), doc in zip(rows, (5.95, 3.98, 2.89, 2.40)):
+        assert abs(got - doc) <= 0.005, (
+            "H=%d breakeven %.4f deviates from the docs/05 table's %.2f; correct one "
+            "side or the other, never leave them apart" % (H, got, doc))
+
+
 def test_accelerator_refuses_unmeasured_gather():
     bare = Accelerator("no-gather", hbm_gbps=3350, hbm_capacity_gb=80,
                        launch_ms=0.1)

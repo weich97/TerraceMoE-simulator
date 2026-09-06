@@ -104,6 +104,53 @@ def breakeven_ratio(chain: float, q: int = 3, tok: int = 4096,
     return hi
 
 
+def breakeven_vs_hidden_width(widths=None, k: int = 6, M: int = 2,
+                              tok: int = 4096, n_groups: int = 16, R: int = 8):
+    """Effective breakeven hierarchy ratio at each measured hidden width.
+
+    The threshold is not flat in H, and H has to move in both places at once: it
+    widens the payload every collective carries and it widens the gather inside the
+    arrival chain, and the two do not scale alike. Over the fourfold range from 2048
+    to 8192 the payload rises by four while the measured chain rises by about 1.5, so
+    the chain's share of two-hop falls and the threshold falls with it.
+
+    Quoting the reference threshold at one hidden width and applying it at another is
+    the error this exists to prevent, and the direction matters: every contemporary
+    MoE model sits above the reference width, where a threshold stated at 2048
+    over-prices the arrival chain -- a cost only two-hop pays. That bias runs against
+    the method this repository proposes, not in its favour.
+
+    Returns [(H, breakeven), ...] at the widths the chain sweep measured.
+    """
+    from .machine import CHAIN_H_SWEEP_MS, chain_us_per_row_at
+    ws = sorted(CHAIN_H_SWEEP_MS) if widths is None else list(widths)
+    out = []
+    for H in ws:
+        chain = chain_us_per_row_at(H)
+
+        def s(r, H=H, chain=chain):
+            c = synthetic(r, chain_us_per_row=chain)
+            g = MoEGeometry(name="H%d" % H, n_groups=n_groups, R=R, k=k, M=M, H=H,
+                            seq=tok, mbs=1, gbs=n_groups * R * tok)
+            return one_hop_call(c, g) / two_hop_call(c, g)
+
+        lo, hi = 1.0, 32.0
+        if s(lo) >= 1.0:
+            out.append((H, lo))
+            continue
+        if s(hi) < 1.0:
+            out.append((H, hi))
+            continue
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            if s(mid) >= 1.0:
+                hi = mid
+            else:
+                lo = mid
+        out.append((H, hi))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The scale axis, as one named construction
 # ---------------------------------------------------------------------------

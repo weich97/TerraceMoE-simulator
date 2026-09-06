@@ -232,6 +232,71 @@ claim("README.md",
       "the corrected reference thresholds are {n} for the measured PyTorch chain and {n} for the hypothetical fused target",
       lambda: _breakevens()[:2], 0.005)
 
+# -- docs/05: the threshold against hidden width ----------------------------
+
+claim("docs/05-simulator.md",
+      "measures {n}, {n}, {n} and {n} ms at H of 1024, 2048, 4096 and 8192.",
+      lambda: _chain_sweep_ms(), 0.005)
+
+claim("docs/05-simulator.md",
+      "the chain grows by {n} while the payload every collective carries grows by four",
+      lambda: _chain_growth(), 0.005)
+
+claim("docs/05-simulator.md",
+      "| effective breakeven, measured chain | {n} | **{n}** | {n} | {n} |",
+      lambda: _hidden_width_series(), 0.005)
+
+claim("docs/05-simulator.md",
+      "H = 2048 point is {n} ms against the calibration's {n}",
+      lambda: _chain_levels(), 0.005)
+
+claim("docs/05-simulator.md",
+      "adopting the sweep's level instead would put the reference threshold at {n}.",
+      lambda: [_sweep_level_breakeven()], 0.005)
+
+
+def _chain_sweep_ms():
+    from sim.machine import CHAIN_H_SWEEP_MS
+    return [CHAIN_H_SWEEP_MS[H] for H in sorted(CHAIN_H_SWEEP_MS)]
+
+
+def _chain_levels():
+    """The sweep's own H = 2048 reading, and the level the calibration ships."""
+    from sim.machine import CHAIN_H_SWEEP_MS, CHAIN_LEVEL_CALIBRATION_MS
+    return [CHAIN_H_SWEEP_MS[2048], CHAIN_LEVEL_CALIBRATION_MS]
+
+
+def _hidden_width_series():
+    from sim.uncertainty import breakeven_vs_hidden_width
+    return [b for _H, b in breakeven_vs_hidden_width()]
+
+
+def _sweep_level_breakeven():
+    """The threshold under the sweep's own arrival-chain level rather than the
+    calibration's. docs/05 reports both, because the gap between the two is the
+    run-to-run drift already documented for that constant."""
+    from sim.machine import CHAIN_H_SWEEP_MS, CHAIN_H_SWEEP_ROWS
+    from sim.uncertainty import breakeven_ratio
+    return breakeven_ratio(CHAIN_H_SWEEP_MS[2048] * 1000.0 / CHAIN_H_SWEEP_ROWS)
+
+
+def _chain_fit():
+    from sim.machine import CHAIN_FIXED_MS, CHAIN_PER_1024H_MS
+    return [CHAIN_FIXED_MS, CHAIN_PER_1024H_MS]
+
+
+def _chain_shares():
+    """Gather against index work at the reference hidden width, as percentages."""
+    from sim.machine import CHAIN_FIXED_MS, CHAIN_PER_1024H_MS
+    gather = CHAIN_PER_1024H_MS * 2.0            # H = 2048, in units of 1024
+    total = CHAIN_FIXED_MS + gather
+    return [100.0 * gather / total, 100.0 * CHAIN_FIXED_MS / total]
+
+
+def _chain_growth():
+    from sim.machine import CHAIN_H_SWEEP_MS
+    return [CHAIN_H_SWEEP_MS[8192] / CHAIN_H_SWEEP_MS[2048]]
+
 
 def _mc(ratio, chain_index):
     from sim.sweep import CHAIN_SCENARIOS
@@ -260,6 +325,30 @@ def _mtable():
     return m_table()
 
 
+def _load_local_claims():
+    """Let a local, gitignored file add claims about documents this repo does not ship.
+
+    Some of what this project writes lives outside the repository and is not published
+    with it. Quoting that text here would put it in a public repository by the back
+    door, so the claims that check it live in ``tests/local_claims.py``, which is
+    gitignored and absent from a clean checkout. It is executed with this module's
+    namespace, so it calls ``claim`` and reuses the helpers above exactly as the claims
+    in this file do.
+    """
+    path = os.path.join(HERE, "local_claims.py")
+    if not os.path.exists(path):
+        return
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_terrace_local_claims", path)
+    mod = importlib.util.module_from_spec(spec)
+    mod.__dict__.update({k: v for k, v in globals().items()
+                         if not k.startswith("__")})
+    spec.loader.exec_module(mod)
+
+
+_load_local_claims()
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -270,6 +359,10 @@ def _mtable():
                               for c in CLAIMS])
 def test_documented_number_reproduces(doc, pattern, values, tol, label):
     """The sentence must still be there, and its numbers must still be the code's."""
+    if not os.path.exists(os.path.join(ROOT, doc)):
+        pytest.skip("%s is not in this checkout, so its claims cannot be checked "
+                    "here. Documents this repository does not ship are registered "
+                    "from tests/local_claims.py, which is gitignored." % doc)
     text = _read(doc)
     found = pattern.findall(text)
     assert found, (

@@ -170,6 +170,38 @@ class ArrivalChain:
         return self.ms(rows, H, accel) * 1000.0 / rows
 
 
+#: The level the rest of this repository is calibrated to: 2.15 ms at
+#: CHAIN_H_SWEEP_ROWS rows and H = 2048, from a single measurement.
+#: calibrate.CHAIN_US_PER_ROW is this number divided by the row count.
+CHAIN_LEVEL_CALIBRATION_MS = 2.15
+
+
+def chain_us_per_row_at(H: int) -> float:
+    """The operator chain's per-row cost at hidden width ``H``, at the shipped level.
+
+    Two measurements of the same quantity disagree by the run-to-run drift already
+    documented for it: the calibration carries 2.15 ms at 24576 rows from one
+    measurement, and this sweep's own H = 2048 point is 2.51 ms from eighteen. Only
+    the sweep resolves the *shape* in H, and only the calibration level is what every
+    other figure in this repository is stated at. So the shape comes from the sweep
+    and the level from the calibration, which makes ``chain_us_per_row_at(2048)``
+    exactly ``calibrate.CHAIN_US_PER_ROW`` and moves no figure quoted at the reference
+    width.
+
+    Taking the sweep's level as well is a legitimate reading of the same data -- it
+    puts the reference threshold at 4.46 rather than 3.98 -- but it is a different
+    one, and it must be chosen rather than arrived at by mixing the two.
+    """
+    if H not in CHAIN_H_SWEEP_MS:
+        raise ValueError(
+            "the hidden-width sweep measured H in %s; the shape between those points "
+            "is not modelled, so this function will not interpolate it"
+            % sorted(CHAIN_H_SWEEP_MS))
+    rebased_ms = (CHAIN_H_SWEEP_MS[H] * CHAIN_LEVEL_CALIBRATION_MS
+                  / CHAIN_H_SWEEP_MS[2048])
+    return rebased_ms * 1000.0 / CHAIN_H_SWEEP_ROWS
+
+
 PYTORCH_CHAIN = ArrivalChain("PyTorch operator chain", INDEX_NS_PER_ROW, 2.0)
 FUSED_CHAIN = ArrivalChain("fused kernel (K1)", 0.0, 1.0, floor_ops=1)
 NO_CHAIN = ArrivalChain("zero implementation overhead", 0.0, 0.0, floor_ops=0)
