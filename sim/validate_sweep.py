@@ -189,7 +189,23 @@ GATE_BIAS = 0.08
 
 
 def _predict(cluster, world: int, total_bytes: float) -> float:
-    """One a2a call on the full-fabric level -- the same account as sim/core.py."""
+    """One a2a call on the full-fabric level -- the same account as sim/core.py.
+
+    Every corpus is priced on the full-fabric level whatever its world, and that is a
+    choice worth stating because sim/core.py does distinguish: hop B runs on the
+    intra-node level and hop A on the cross-node one. Machine A is 16 nodes of 8
+    cards, so corpus D at world 8 is one node and corpus C at world 16 is two.
+
+    Scoring them on the level the topology implies was tried and is not adopted.
+    Corpus C improves, its signed bias falling from -1.96% to -0.09% on the cross-node
+    level, which is the level a two-node sweep should run on. Corpus D gets worse, from
+    15.1% to 15.5% median and -9.1% to -11.8% bias, because the intra-node level ships
+    the physics-endorsed 122.4 GB/s while this corpus delivers 107 (calibrate.
+    MARGINAL_BW_BY_WORLD) -- the same two-benchmark-family disagreement recorded in
+    sim/fit.py, showing up as a level this time. Taking the half that helps is choosing
+    by outcome, and how each sweep was actually launched across nodes is not recorded
+    here, so both stay on one level and the observation is written down instead.
+    """
     wire = total_bytes * (world - 1) / world
     beta = cluster.flat.beta_gbps(total_bytes / world)
     return cluster.flat.alpha_ms(world) + wire / (beta * 1e6)

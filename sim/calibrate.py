@@ -189,13 +189,39 @@ CHAIN_LINEAR_MIN_ROWS = 8192              # below this the linear form under-pri
 
 
 def saturating_beta(beta_inf: float, x_half: float,
-                    lo: float = 1e3, hi: float = 1e9, n: int = 48) -> list:
+                    lo: float = 1e3, hi: float = 1e9, n: int = 48,
+                    floor: float = 1.0) -> list:
     """Sample beta_inf * x/(x + x_half) into the (bytes, GB/s) table ClusterSpec reads.
 
     Logarithmic sampling keeps the interpolation error far below measurement noise
     over the whole range. x_half <= 0 gives back a flat table.
+
+    **The range is the model's domain, not a convenient window.** This used to sample
+    [1 KiB, 1 GiB] with 48 points, and core._interp clamps outside its table, so every
+    per-peer size below 1 KiB was priced at the 1 KiB bandwidth instead of its own.
+    That is not a small effect down there: the curve falls roughly linearly toward
+    zero below x_half, so the clamp over-credited a 246-byte message by a factor of
+    fifteen, and made the model FASTER than the form it is supposed to implement.
+    Two measured points sit in that region -- machine B's two smallest world-128
+    sizes -- and at both the clamp moved the model away from the measurement, by 8.4
+    and 6.8 percentage points.
+
+    The grid is therefore extended down to ``floor`` at the same points per decade,
+    which removes the clamp. It extends rather than re-spaces on purpose: every sample
+    at and above ``lo`` keeps its exact position, so no number this repository has
+    published moves by so much as a last digit, and the only predictions that change
+    are the ones that were being clamped. Worst interpolation error against the
+    analytic curve over the whole domain falls from 1436% to 1.1%, and no gate moves
+    by as much as 0.02 points. tests/test_sim.py pins both halves.
     """
-    xs = [lo * (hi / lo) ** (i / (n - 1)) for i in range(n)]
+    step = (hi / lo) ** (1.0 / (n - 1))
+    xs = [lo * step ** i for i in range(n)]
+    x = lo / step
+    while x > floor:                       # same spacing, extended downward
+        xs.insert(0, x)
+        x /= step
+    xs.insert(0, x)                        # one sample at or below the floor, so the
+                                           # floor itself is interpolated, not clamped
     if x_half <= 0:
         return [(x, beta_inf) for x in xs]
     return [(x, beta_inf * x / (x + x_half)) for x in xs]

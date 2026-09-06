@@ -714,6 +714,57 @@ def test_x_half_is_exactly_a_per_peer_message_cost():
     assert (hop_a + hop_b) * PER_PEER_MESSAGE_US / 1000 == pytest.approx(0.010, abs=0.001)
 
 
+def test_the_beta_table_covers_the_domain_it_is_asked_about():
+    """The sampled bandwidth table must not clamp inside the range of real messages.
+
+    core._interp clamps outside its table, so a grid that starts at 1 KiB prices every
+    smaller per-peer message at the 1 KiB bandwidth. Below x_half the curve falls
+    roughly linearly toward zero, so that clamp over-credited a 246-byte message by a
+    factor of fifteen and made the model faster than the form it implements. Two
+    measured points sit there and the clamp moved both away from the measurement.
+
+    The grid is extended downward rather than re-spaced, which is the half of this
+    worth guarding: every sample at and above 1 KiB keeps its exact position, so the
+    fix moves no published number, and only the predictions that were being clamped
+    change.
+    """
+    from sim.calibrate import (BETA_FLAT, SECOND_BETA_FLAT, X_HALF_FLAT,
+                               saturating_beta, second_machine)
+    from sim.core import _interp
+
+    tbl = saturating_beta(BETA_FLAT, X_HALF_FLAT)
+    xs = [x for x, _b in tbl]
+    assert xs[0] <= 1.0, "the table still clamps inside the domain of real messages"
+
+    # the samples the old grid had are still exactly where they were
+    old = [1e3 * (1e9 / 1e3) ** (i / 47.0) for i in range(48)]
+    kept = [x for x in xs if x >= 1e3 - 1e-9]
+    assert len(kept) == len(old)
+    for got, want in zip(kept, old):
+        assert got == pytest.approx(want, rel=1e-12)
+
+    # and the table tracks the curve it samples, everywhere a message can land
+    def exact(x):
+        return BETA_FLAT * x / (x + X_HALF_FLAT)
+
+    probe = [64 * 2 ** (i / 4.0) for i in range(97)]     # 64 B to 1 GiB
+    worst = max(abs(_interp(tbl, x, logx=True) - exact(x)) / exact(x) for x in probe)
+    assert worst < 0.02, "interpolation error %.3f%% is no longer negligible" % (100 * worst)
+
+    # the two corpus-B points that used to be clamped now sit on the analytic form
+    c = second_machine()
+    for world, S, measured, was in ((128, 31457, 0.5658, -0.276),
+                                    (128, 62914, 0.4691, -0.093)):
+        x, wire = S / world, S * (world - 1) / world
+        model = c.flat.alpha_ms(world) + wire / (c.flat.beta_gbps(x) * 1e6)
+        analytic = c.flat.alpha_ms(world) + wire / (
+            SECOND_BETA_FLAT * x / (x + X_HALF_FLAT) * 1e6)
+        assert model == pytest.approx(analytic, rel=0.005)
+        assert abs((model - measured) / measured) < abs(was), (
+            "the clamp used to put this point at %+.1f%%; the fix must improve it"
+            % (100 * was))
+
+
 def test_marginal_bandwidth_is_model_free_and_depends_on_world():
     """Delivered bandwidth read off the data, and the world-dependence it exposes.
 
