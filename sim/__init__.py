@@ -39,8 +39,30 @@ into a simulator with **swappable cluster parameters**.
 - Not modeled: overlap/pipelining (neither control-testbed arm overlaps; baselines match),
   fault tolerance, and the tails of network jitter.
 """
-from .core import ClusterSpec, MoEGeometry, one_hop_call, two_hop_call, step_delta
-from .validate import HOLDOUTS, validate
+# The convenience names are resolved on first use rather than imported here.
+# Importing them eagerly pulls sim.validate into sys.modules while the package is
+# still initialising, so ``python -m sim.validate`` and ``python -m sim.sweep`` --
+# two of the commands docs/05 tells a reader to run -- opened with a RuntimeWarning
+# about unpredictable behaviour before printing anything. The names below behave
+# exactly as before; only the moment of import moved.
+_LAZY = {
+    "ClusterSpec": "core", "MoEGeometry": "core", "one_hop_call": "core",
+    "two_hop_call": "core", "step_delta": "core",
+    "HOLDOUTS": "validate", "validate": "validate",
+}
 
-__all__ = ["ClusterSpec", "MoEGeometry", "one_hop_call", "two_hop_call",
-           "step_delta", "HOLDOUTS", "validate"]
+__all__ = sorted(_LAZY)
+
+
+def __getattr__(name):
+    if name not in _LAZY:
+        raise AttributeError("module %r has no attribute %r" % (__name__, name))
+    import importlib
+    mod = importlib.import_module("." + _LAZY[name], __name__)
+    value = getattr(mod, name)
+    globals()[name] = value          # resolve once
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))

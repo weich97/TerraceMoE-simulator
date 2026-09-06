@@ -114,22 +114,22 @@ class Family:
 
 def _families() -> list:
     return [
-        Family("M0", "naive: Δ=Δmodel (no overlap)", 0,
+        Family("M0", "naive: d = d_model (no overlap)", 0,
                lambda d, p: d.d_model,
                lambda d: 0.0),
-        Family("M1", "prop: Δ=φ·Δmodel", 1,
+        Family("M1", "prop: d = phi*d_model", 1,
                lambda d, p: p * d.d_model,
                lambda d: d.d_meas / d.d_model),
-        Family("M2", "hide/call: Δ=Δmodel-h·calls", 1,
+        Family("M2", "hide/call: d = d_model-h*calls", 1,
                lambda d, p: d.d_model - p * d.calls,
                lambda d: (d.d_model - d.d_meas) / d.calls),
-        Family("M3", "hide-fixed: Δ=Δmodel-φ·fixed", 1,
+        Family("M3", "hide-fixed: d = d_model-phi*fixed", 1,
                lambda d, p: d.d_model - p * d.fixed,
                lambda d: (d.d_model - d.d_meas) / d.fixed),
-        Family("M4", "hide∝comp: Δ=Δmodel-c·T_comp", 1,
+        Family("M4", "hide~comp: d = d_model-c*T_comp", 1,
                lambda d, p: d.d_model - p * d.t_comp,
                lambda d: (d.d_model - d.d_meas) / d.t_comp),
-        Family("M5", "expose-mb: Δ=Δmodel·(1-λ/mbs)", 1,
+        Family("M5", "expose-mb: d = d_model*(1-lam/mbs)", 1,
                lambda d, p: d.d_model * (1.0 - p / d.mbs),
                lambda d: (1.0 - d.d_meas / d.d_model) * d.mbs),
     ]
@@ -174,9 +174,9 @@ def _report(decs, results) -> None:
               (d.name, d.mbs, d.g_meas, d.d_meas, d.d_model, d.fixed,
                d.d_meas / d.d_model))
     print()
-    print("Model-family retrodiction (fit uses flag only; gate = MAE≤0.025 and ≥4/6 within ±0.035 and all signs correct):")
+    print("Model-family retrodiction (fit uses flag only; gate = MAE<=0.025 and >=4/6 within +-0.035 and all signs correct):")
     print("%-4s %-34s %10s %8s %7s %7s %6s" %
-          ("fam", "structure", "param", "MAE", "±0.035", "signs", "gate"))
+          ("fam", "structure", "param", "MAE", "+-0.035", "signs", "gate"))
     for k, r in results.items():
         print("%-4s %-34s %10.4f %8.4f %5d/6 %5d/%d %6s" %
               (k, r["desc"], r["param"], r["mae"], r["in_tol"],

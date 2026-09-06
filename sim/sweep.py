@@ -67,10 +67,10 @@ def main() -> None:
             print("%-16s" % ("q=%d" % q), "".join(cells))
     print()
     print("How to read:")
-    print("  · The flat column (1.03) stays <=1 at every implementation tier -- matches our measured negative verdict (internal consistency).")
-    print("  · Columns with hierarchy ratio >=3.2 are all >1 inside the calibrated")
+    print("  - The flat column (1.03) stays <=1 at every implementation tier -- matches our measured negative verdict (internal consistency).")
+    print("  - Columns with hierarchy ratio >=3.2 are all >1 inside the calibrated")
     print("    sensitivity model; the ratios are synthetic rather than target measurements.")
-    print("  · The implementation tier changes the magnitude materially.  Because the")
+    print("  - The implementation tier changes the magnitude materially.  Because the")
     print("    fused tier is hypothetical and the high-ratio columns are sensitivity")
     print("    scenarios, none of these cells is a target-platform deployment verdict.")
 

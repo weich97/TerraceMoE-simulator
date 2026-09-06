@@ -116,15 +116,15 @@ def main() -> None:
         # 1-3% margin is not a signal engineering can cash in.
         margin = max(args.ratio / r - 1.0 for q, r in rows if q in good)
         if margin < 0.10:
-            print("Ratio %.2f only scrapes past the line at q ∈ %s, max margin %.1f%% — **marginal case, "
+            print("Ratio %.2f only scrapes past the line at q in %s, max margin %.1f%% -- **marginal case, "
                   "almost certain to be eaten by the alpha side; do not adopt**." % (args.ratio, good, margin * 100))
-            print("This method wants a hierarchy with multiples of margin (see docs/03 §2), not a percent-level squeak past the line.")
+            print("This method wants a hierarchy with multiples of margin (see docs/03 section 2), not a percent-level squeak past the line.")
         else:
-            print("At ratio %.2f, two-hop comes out ahead on bytes at q ∈ %s (max margin %.0f%%) — "
+            print("At ratio %.2f, two-hop comes out ahead on bytes at q in %s (max margin %.0f%%) -- "
                   "worth an integration experiment." % (args.ratio, good, margin * 100))
-            print("Next step: audit the alpha side (the fixed overhead of two-hop's extra collective), see docs/03 §4.")
+            print("Next step: audit the alpha side (the fixed overhead of two-hop's extra collective), see docs/03 section 4.")
     else:
-        print("Ratio %.2f does not clear the breakeven line at any quota — **your interconnect is too flat "
+        print("Ratio %.2f does not clear the breakeven line at any quota -- **your interconnect is too flat "
               "for this method, do not use two-hop**. The routing-constraint part of T-Route (load "
               "balancing) can still be evaluated independently."
               % args.ratio)

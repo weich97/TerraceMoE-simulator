@@ -115,7 +115,7 @@ def validate(cluster, verbose: bool = True):
         print("%-8s %-12s %8s %8s %8s" % ("geom", "role", "G_meas", "G_pred", "err"))
         for n, r, gm, gp, e in rows:
             print("%-8s %-12s %8.4f %8.4f %+8.4f" % (n, r, gm, gp, e))
-        print("holdout MAE=%.4f (gate 0.025)  within ±0.035: %d/6 (gate 4)  signs: %d/4 (gate 4)"
+        print("holdout MAE=%.4f (gate 0.025)  within +-0.035: %d/6 (gate 4)  signs: %d/4 (gate 4)"
               % (mae, in_tol, signs_ok))
         print("**%s**" % ("PASS -- extrapolation allowed" if ok else
                           "FAIL -- extrapolation forbidden; fix the model first"))

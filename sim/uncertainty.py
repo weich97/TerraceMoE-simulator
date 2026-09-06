@@ -42,7 +42,7 @@ N_DRAWS = 400
 # (name, multiplicative perturbation lower bound, upper bound, provenance)
 PERTURB = [
     ("alpha", 0.80, 1.20, "run-to-run drift ~20% (measured)"),
-    ("beta_slow", 0.90, 1.10, "three runs ±9% (measured, rounded)"),
+    ("beta_slow", 0.90, 1.10, "three runs +-9% (measured, rounded)"),
     ("beta_fast", 0.995, 1.005, "run-to-run spread <0.3% (measured, physics-endorsed tier)"),
     ("splits", 0.95, 1.05, "measured range 0.042-0.046"),
     ("chain", 0.90, 1.10, "assumption: tensor chain drifts less than communication"),
@@ -250,7 +250,7 @@ def main() -> None:
     print("\nTwo robustness anchors (whether a conclusion holds depends on the band's ends):")
     p5, _, p95 = mc_band(1.03, CHAIN_SCENARIOS[2][1])   # zero overhead + flat
     print("  flat column, most favorable case (zero implementation overhead) p95 = %.2f -> %s" %
-          (p95, "≤1, the negative verdict is robust to calibration error" if p95 <= 1.0
+          (p95, "<=1, the negative verdict is robust to calibration error" if p95 <= 1.0
            else "!! crosses the line -- tighten the written conclusion"))
     p5b, _, _ = mc_band(8.0, CHAIN_SCENARIOS[0][1])     # PyTorch chain + 8x
     print("  8x column, least favorable case (PyTorch chain) p5 = %.2f -> %s" %
