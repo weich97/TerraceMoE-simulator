@@ -291,6 +291,118 @@ tiering exists to prevent. The corpus ships red, with the cause, held out of the
 Tier-1b conjunction because it probes one constant's drift rather than the model
 form.
 
+### What x_half actually is
+
+The half-performance size is usually read as a bandwidth curve. It is not one. Substituting
+`beta_eff = beta_inf * x/(x + x_half)` with `x` the per-peer bytes into the wire term gives,
+exactly and with no approximation,
+
+```
+wire / beta_eff(x)  ==  wire / beta_inf  +  (world - 1) * x_half / beta_inf
+```
+
+so the saturating bandwidth **is** a fixed cost per peer message, and `x_half / beta_inf` is
+that cost: **0.469 microseconds** here. A collective at world w pays it w-1 times, once per
+peer, on top of the bytes. `sim/calibrate.py::PER_PEER_MESSAGE_US` carries it and a test pins
+the identity.
+
+Three things follow. The parameter acquires units and a meaning, which is worth having before
+anyone quotes it. The alpha/x_half degeneracy this page records stops being a curiosity and
+becomes arithmetic: at a fixed world `(world-1)*o` is a constant added to `alpha(world)`, so
+to any single-world corpus the two *are* the same parameter, which is exactly why `sim/fit.py`
+insists on pinning alpha and why an x_half fitted with alpha free means nothing.
+
+And two-hop's advantage on this axis becomes countable rather than qualitative. One hop over
+the full fabric sends **127** peer messages; Hop A sends 15 and Hop B 7, so the swap pays
+**22** of them instead of 127. At the shipped value that is 0.060 ms against 0.010 ms per
+call. This is a real part of the two-hop case and it was previously buried inside a bandwidth
+curve.
+
+### The bandwidth the machine delivers is not one number
+
+The model gives every level one `beta`. Reading the delivered bandwidth straight off the data
+says otherwise. Regress wall clock on wire bytes over the largest four sizes at each world and
+the slope is the bandwidth actually delivered, with no alpha, no x_half and no model form in
+it (`sim/fit.py::marginal_bandwidth`):
+
+| world | 8 | 16 | 32 | 64 | 128 |
+|---|---:|---:|---:|---:|---:|
+| platform A, GB/s | 107 | 103 | — | — | 121 |
+| platform B, GB/s | 100 | 97 | 107 | 107 | 113 |
+
+Both machines dip at world 16 and rise from there, and both sit below the shipped
+`beta_inf = 117.8` at every world except A's 128. The single beta absorbs that world-dependence
+into the per-world alpha beside it, which it can, because alpha is fitted per world — so
+**alpha is not purely a fixed cost here; it carries a bandwidth error too**.
+
+Read `n_top` with care: two points give a difference rather than a slope, and at `n_top = 2`
+platform A's world-128 corpus reads 137 GB/s, above the 122.4 per-card aggregate egress this
+page endorses as physics. At `n_top` of 4 and 5 it settles at 121 and 119, below it. The
+apparent violation was two noisy medians, not a machine exceeding its own links.
+
+This bears on the two-hop question directly, because the geometry decides which of those
+numbers each strategy gets. One hop runs at the full world, where delivery is best; Hop A runs
+at world `N_g` and Hop B at world `R`, both in the worst part of the curve. Pricing all three
+at one beta therefore flatters two-hop, and `sim/profile.py::bandwidth_world_sensitivity`
+prices by how much:
+
+| arrival chain tier | one beta | per-world bandwidth |
+|---|---:|---:|
+| PyTorch chain (measured) | 3.98 | **4.52** |
+| hypothetical fused target | 1.49 | 1.78 |
+| zero implementation overhead | 1.10 | 1.34 |
+
+That is a larger displacement than the measured launch cost produces (3.98 to 4.15), and it
+runs the same way: **against** the method this repository proposes.
+
+**It is not adopted**, for two reasons that matter more than the size of the effect.
+Substituting a marginal slope for `beta_inf` without refitting alpha is not a recalibration —
+the slope at the top of a sweep and the beta that best fits a whole curve are different
+quantities, and alpha carries the difference. Scored as though it were one, it degrades three
+of four corpora: Tier-1 from 4.1% to 7.4%, corpus A from 1.9% to 2.7%, corpus C from 8.0% to
+9.3%, improving only the corpus that already fails, 15.1% to 13.2%. And the slopes come from
+the size-sweep benchmark family while Tier-1 belongs to the other one, which this page records
+as disagreeing in level; importing a level across that boundary is the mixing error the
+calibration warns about. So it ships as a sensitivity, and the honest reading of 3.98 is that
+it is the flattering end of this axis rather than the conservative one.
+
+### A model form we tested and did not adopt
+
+The shipped model adds every fixed cost to the transfer. The corpora do not look additive: at
+world 8 the measured curve is flat near 0.145 ms from 32 KiB to 8 MiB and only then ramps,
+while an additive model starts ramping at once. So we tested the alternative, that the fixed
+cost and the transfer overlap and the call takes the larger of the two with a soft knee —
+the same three parameters combined differently (`sim/fit.py::compare_forms`):
+
+```
+t = (alpha^p + T^p)^(1/p)     T = wire/beta_inf + (world-1)*o
+```
+
+`p = 1` is the shipped form, `p = 2` quadrature, large `p` a hard max.
+
+| form | machine A, 33 points | machine B, 44 points | parameters |
+|---|---:|---:|---|
+| additive (shipped) | 7.8% | 9.3% | baseline |
+| quadrature | **2.6%** | **7.1%** | same as shipped |
+| soft-max, p fitted | 2.4% | 6.8% | one more |
+
+Quadrature cuts the error to a third of the additive form's on machine A at **identical
+parameter count**, and machine B reproduces the direction on its own independent fit. That is
+a large effect and it is not bought with a parameter.
+
+**It is not adopted, and the reason is the interesting part.** Two tests were fixed in advance
+and it failed both. Held out one corpus at a time, with the held-out world's alpha taken from
+the independent call-count scan and never fitted, the overlap form predicted the unseen world
+*worse* than the additive form in two cases of three. And refitted to the Tier-1 targets it
+was worse there too, 9.7% against 4.7%.
+
+Tier-1 belongs to the direct-alpha benchmark family and the corpora to the size-sweep family.
+So what this experiment actually measured is that **the two families differ in shape, not only
+in level** — a sharper statement than the level disagreement already recorded in
+`sim/fit.py`, and one that says what would settle it: a single run of both benchmarks at the
+same world over the same sizes. Nothing offline can. The negative result is recorded so the
+road is not walked twice.
+
 ## Payload: what the model varies, and what it deliberately does not
 
 The cost of a call is driven by payload, so it is worth being explicit about which

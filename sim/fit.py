@@ -185,6 +185,136 @@ def fit_beta_pinned(records: list, alpha_of_world, seeds=(2e4, 2e5, 2e6)) -> dic
             "median_rel_err": err, "n": len(records)}
 
 
+def compare_forms(records, exponents=(1.0, 2.0, None)) -> dict:
+    """Does a collective's fixed cost ADD to its transfer, or OVERLAP with it?
+
+    The shipped model adds: t = alpha + wire/beta_inf + (world-1)*o, every fixed cost
+    paid in series with the bytes. An alternative is that the fixed cost and the
+    transfer proceed together, so the call takes the larger of the two with a soft
+    knee where they are comparable. Both are the same three parameters combined
+    differently:
+
+        t = (alpha^p + T^p)^(1/p),   T = wire/beta_inf + (world-1)*o
+
+    p = 1 is the shipped additive form, p = 2 is quadrature, large p is a hard max.
+    Passing None for an exponent fits it, which costs one parameter over the dataset
+    and nests all three.
+
+    Fitted the same way for every form -- one alpha per world, shared (beta_inf, o),
+    least squares on relative error -- so only the combination rule differs and the
+    medians are comparable. Returns {label: {median, worst, beta_inf, o_us, p, alpha}}.
+
+    **On this repository's own corpora the answer was: better fit, no adoption.** The
+    quadrature form, at exactly the shipped parameter count, cut the median relative
+    error from 7.8% to 2.6% on machine A's three corpora and from 9.3% to 7.1% on
+    machine B fitted independently. It then failed the two tests that decide: held out
+    one corpus at a time it predicted the unseen world worse than the additive form in
+    two cases of three, and refitted to the Tier-1 targets it was worse there too,
+    9.7% against 4.7%. Tier-1 belongs to the direct-alpha benchmark family and the
+    corpora to the size-sweep family, so what this measures is that **the two families
+    differ in shape and not only in level**, which sharpens the disagreement recorded
+    at the end of this module's docstring rather than resolving it. One run of both
+    benchmarks at the same world over the same sizes would settle it; nothing offline
+    can. Recorded so the road is not walked twice.
+    """
+    from scipy.optimize import least_squares
+    import numpy as np
+
+    rows = [(r[0], r[1], r[2]) if len(r) == 3 else (r[1], r[2], r[3])
+            for r in records]
+    worlds = sorted({int(w) for w, _s, _t in rows})
+    idx = {w: i for i, w in enumerate(worlds)}
+    W = np.array([w for w, _s, _t in rows], float)
+    S = np.array([s for _w, s, _t in rows], float)
+    t = np.array([x for _w, _s, x in rows], float)
+    wi = np.array([idx[int(w)] for w, _s, _t in rows])
+    wire = S * (W - 1) / W
+    n = len(worlds)
+
+    def combine(a, T, p):
+        return np.maximum(a, T) if p >= 60 else (a ** p + T ** p) ** (1.0 / p)
+
+    out = {}
+    for p in exponents:
+        def model(q, p=p):
+            pp = q[n + 2] if p is None else p
+            T = wire / (q[n] * 1e6) + (W - 1) * q[n + 1] / 1000.0
+            return combine(q[:n][wi], T, pp)
+
+        lo = [1e-4] * n + [1.0, 0.0] + ([0.5] if p is None else [])
+        hi = [20.0] * n + [4000.0, 100.0] + ([60.0] if p is None else [])
+        best = None
+        for seed in (0.5, 2.0, 5.0):
+            q0 = [0.15] * n + [110.0, seed] + ([2.0] if p is None else [])
+            r = least_squares(lambda q: (model(q) - t) / t, q0, bounds=(lo, hi),
+                              max_nfev=60000)
+            e = float(np.median(np.abs((model(r.x) - t) / t)))
+            if best is None or e < best[1]:
+                best = (r.x, e)
+        q, e = best
+        label = ("additive (shipped)" if p == 1.0 else
+                 "quadrature" if p == 2.0 else
+                 "hard max" if p is not None and p >= 60 else
+                 "soft-max, p fitted" if p is None else "p=%g" % p)
+        out[label] = {"median": e,
+                      "worst": float(np.max(np.abs((model(q) - t) / t))),
+                      "beta_inf": float(q[n]), "o_us": float(q[n + 1]),
+                      "p": float(q[n + 2]) if p is None else float(p),
+                      "alpha": {w: float(a) for w, a in zip(worlds, q[:n])}}
+    return out
+
+
+def marginal_bandwidth(records, n_top: int = 4) -> dict:
+    """Delivered bandwidth per world, read off the data with no model in the way.
+
+    Every other number in this module is a fit. This one is not: it regresses wall
+    clock on wire bytes over the ``n_top`` largest sizes at each world and returns the
+    slope. alpha, x_half and the model form all drop out, because at the top of a
+    sweep the fixed costs are a constant offset and only the transfer is still
+    growing. That makes it the one quantity here usable as a check ON the cost model
+    rather than a product of it.
+
+    Two things to read it against. The per-card physical ceiling, which for the
+    reference machine is the aggregate egress of 122.4 GB/s that docs/05 endorses; a
+    slope above it means the corpus, the byte convention or the ceiling is wrong, and
+    a slope far below it is bandwidth the machine is not delivering. And the shipped
+    beta_inf, which the cost model applies at every world at once: where the slopes
+    disagree across worlds, that single beta is absorbing a world-dependence into the
+    per-world alpha beside it.
+
+    ``n_top`` matters and is worth sweeping. Two points give a difference, not a
+    slope, and a difference of two noisy medians can sit anywhere: on the reference
+    machine's world-128 corpus n_top=2 reads 137 GB/s, above the physical ceiling,
+    while n_top=4 and 5 settle at 121 and 119, below it.
+
+    Accepts (world, bytes, ms) triples or the (frame, world, bytes, ms) rows
+    ``load_records`` returns; frames, if present, are kept apart.
+    """
+    rows = {}
+    for r in records:
+        frame, world, nbytes, ms = ("", r[0], r[1], r[2]) if len(r) == 3 else r
+        rows.setdefault((frame, int(world)), []).append((float(nbytes), float(ms)))
+    out = {}
+    for (frame, world), pts in rows.items():
+        pts = sorted(pts)[-n_top:]
+        if len(pts) < 2:
+            continue
+        wire = [s * (world - 1) / world for s, _t in pts]
+        secs = [t * 1e-3 for _s, t in pts]
+        n = len(wire)
+        mx = sum(wire) / n
+        my = sum(secs) / n
+        den = sum((x - mx) ** 2 for x in wire)
+        if den <= 0:
+            continue
+        slope = sum((x - mx) * (y - my) for x, y in zip(wire, secs)) / den
+        if slope <= 0:
+            continue
+        key = (frame, world) if frame else world
+        out[key] = 1.0 / slope / 1e9
+    return out
+
+
 def audit(records: list, verbose: bool = True) -> dict:
     """Fit every frame separately and report. Frames are never pooled.
 

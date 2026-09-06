@@ -270,6 +270,81 @@ def launch_sensitivity(geom, chain_us_per_row: float,
     return out
 
 
+def bandwidth_world_sensitivity(geom=None, chain_us_per_row: float = None) -> list:
+    """What the world-dependence of delivered bandwidth costs the two-hop verdict.
+
+    The cost model gives every level one beta. The measured marginal bandwidth
+    (calibrate.MARGINAL_BW_BY_WORLD, read off the corpora with no model in the way by
+    fit.marginal_bandwidth) is not one number: 107 GB/s at world 8, 103 at 16 and 121
+    at 128 on the reference machine, with the second machine reproducing the shape.
+
+    The geometry decides which of those a strategy gets. One hop runs at the full
+    world, where delivery is best. Hop A runs at world n_groups and hop B at world R,
+    both in the worst part of the curve. So a single beta flatters two-hop, and this
+    prices by how much: giving each level the bandwidth measured at its own world
+    moves the effective breakeven from 3.98 to 4.52 on the measured chain, 1.49 to
+    1.78 fused, and 1.10 to 1.34 at zero overhead.
+
+    **Not adopted, for two reasons.** Substituting a marginal slope for beta_inf
+    without refitting alpha is not a recalibration: the slope at the top of a sweep and
+    the beta that best fits the whole curve are different quantities, and alpha carries
+    the difference. Scored as if it were one, it degrades three of the four corpora --
+    Tier-1 from 4.1% to 7.4% median, corpus A from 1.9% to 2.7%, corpus C from 8.0% to
+    9.3% -- and improves only the corpus that already fails, from 15.1% to 13.2%. And
+    the bandwidths come from the size-sweep benchmark family while Tier-1 belongs to
+    the other one, which calibrate.py documents as disagreeing in level; importing a
+    level across that boundary is the mixing error it warns about.
+
+    What survives is the direction, and it runs against the method this repository
+    proposes: the shipped threshold of 3.98 is the flattering end of this sensitivity,
+    not the conservative one. Returns [(tier name, shipped breakeven, per-world
+    breakeven), ...].
+    """
+    from .calibrate import (ALPHA_PTS, CHAIN_US_PER_ROW, MARGINAL_BW_BY_WORLD,
+                            SPLITS_SYNC_MS, X_HALF_FLAT, saturating_beta, synthetic)
+    from .core import ClusterSpec, Level, MoEGeometry, one_hop_call, two_hop_call
+    from .sweep import CHAIN_SCENARIOS
+
+    g = geom or MoEGeometry(name="ref", n_groups=16, R=8, k=6, M=2, H=2048,
+                            seq=4096, mbs=1, gbs=16 * 8 * 4096)
+    tiers = ([(n, c) for n, c in CHAIN_SCENARIOS]
+             if chain_us_per_row is None else [("supplied", chain_us_per_row)])
+
+    def spec(ratio, chain, per_world):
+        c = synthetic(ratio, chain_us_per_row=chain)
+        if not per_world:
+            return c
+        m = MARGINAL_BW_BY_WORLD
+        scale = lambda lvl, w: [(x, b * m[w] / 117.8) for x, b in lvl.beta_pts]
+        return ClusterSpec(
+            name=c.name + " + per-world bandwidth", R=c.R,
+            fast=Level("fast", c.fast.alpha_pts, scale(c.fast, 8)),
+            slow=Level("slow", c.slow.alpha_pts, scale(c.slow, 16)),
+            flat=Level("flat", c.flat.alpha_pts, scale(c.flat, 128)),
+            splits_sync_ms=c.splits_sync_ms, chain_us_per_row=c.chain_us_per_row)
+
+    def breakeven(chain, per_world):
+        lo, hi = 1.0, 32.0
+
+        def s(r):
+            c = spec(r, chain, per_world)
+            return one_hop_call(c, g) / two_hop_call(c, g)
+
+        if s(lo) >= 1.0:
+            return lo
+        if s(hi) < 1.0:
+            return hi
+        for _ in range(50):
+            mid = (lo + hi) / 2.0
+            if s(mid) >= 1.0:
+                hi = mid
+            else:
+                lo = mid
+        return hi
+
+    return [(name, breakeven(ch, False), breakeven(ch, True)) for name, ch in tiers]
+
+
 def verdict(conditions) -> dict:
     failed = [c for c in conditions if not c.passed]
     return {"qualifies": not failed,

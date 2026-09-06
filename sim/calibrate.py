@@ -86,6 +86,51 @@ BETA_FLAT = 117.8    # 128-card full-fabric a2a: asymptotic bandwidth, fitted on
 #   meaningful with alpha pinned to its direct measurements, which is how it was fitted.
 X_HALF_FLAT = 54 * 1024
 X_HALF_CI = (30 * 1024, 87 * 1024)
+
+# What x_half actually is, which is worth knowing before quoting it. Substituting
+# beta_eff = beta_inf * x/(x + x_half) with x = per-peer bytes into the wire term gives,
+# exactly and with no approximation,
+#
+#     wire / beta_eff(x)  ==  wire / beta_inf  +  (world - 1) * x_half / beta_inf
+#
+# so the saturating bandwidth is algebraically a **fixed cost per peer message**, and
+# x_half / beta_inf is that cost. It is 0.469 us here. Three things follow.
+#
+# The parameter has units and a meaning: a collective at world w pays it w-1 times,
+# once per peer it must send to, on top of the bytes.
+#
+# It explains the alpha/x_half degeneracy this file and sim/fit.py both document,
+# rather than merely recording it. At a fixed world, (world-1)*o is a constant added
+# to alpha(world), so the two are the same parameter to any single-world corpus. Only
+# a corpus spanning worlds can separate them, which is why fit.py insists on pinning
+# alpha and why an x_half fitted with alpha free is meaningless.
+#
+# And it makes two-hop's advantage on this axis countable instead of qualitative: one
+# hop over the full fabric sends 127 peer messages, while hop A sends 15 and hop B 7,
+# so the swap pays 22 of these instead of 127. At the shipped value that is 0.060 ms
+# against 0.010 ms per call. tests/test_sim.py pins the identity.
+PER_PEER_MESSAGE_US = X_HALF_FLAT / (BETA_FLAT * 1e9) * 1e6
+
+# Marginal bandwidth delivered at each world, measured model-free: the slope of a
+# straight line through the largest four points of each corpus (sim/fit.py::
+# marginal_bandwidth). No alpha, no x_half and no model form enter it, which is what
+# makes it usable as a check ON the model rather than a product of it.
+#
+# It is not one number. Machine A delivers 107 GB/s at world 8, 103 at world 16 and
+# 121 at world 128, and machine B reproduces the shape on its own corpus: 100, 97,
+# 107, 107, 113 at worlds 8/16/32/64/128. Both machines dip at world 16 and rise
+# from there. The shipped model uses a single beta for every world and lets the
+# per-world alpha absorb the difference, which it can, because alpha is fitted per
+# world -- so alpha here is not purely a fixed cost, it carries a bandwidth error too.
+#
+# This matters to the two-hop question specifically, because hop A runs at world
+# n_groups and hop B at world R, both in the low-bandwidth part of that curve, while
+# one-hop runs at the full world where delivery is best. Pricing all three at one beta
+# therefore flatters two-hop. profile.bandwidth_world_sensitivity prices it: the
+# effective breakeven moves from 3.98 to 4.52. **Not adopted**, and the reason is in
+# that function's docstring.
+MARGINAL_BW_BY_WORLD = {8: 107.4, 16: 103.0, 128: 120.6}
+MARGINAL_BW_SECOND_MACHINE = {8: 99.6, 16: 96.5, 32: 106.9, 64: 107.1, 128: 113.3}
 # How much room the *gates* leave x_half, which is a different quantity from the
 # bootstrap interval above: sweep x_half, rerun Tier-1 and all three Tier-1b corpora,
 # and see where every one of them still passes.

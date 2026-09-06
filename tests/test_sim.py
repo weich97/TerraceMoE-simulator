@@ -683,6 +683,139 @@ def test_measured_launch_brackets_the_shipped_alpha():
         % (HOST_EXPOSURE_MS, ["%.3f" % g for g in gaps]))
 
 
+def test_x_half_is_exactly_a_per_peer_message_cost():
+    """The saturating bandwidth is algebraically a fixed cost per peer message.
+
+    Substituting beta_eff = beta_inf * x/(x + x_half) with x the per-peer bytes gives
+    wire/beta_inf + (world-1)*x_half/beta_inf, exactly. This is not an approximation
+    and not a regime: it holds at every world and every size. It is pinned because it
+    is what gives x_half units, what explains the alpha/x_half degeneracy, and what
+    makes two-hop's saving on this axis countable.
+    """
+    from sim.calibrate import BETA_FLAT, PER_PEER_MESSAGE_US, X_HALF_FLAT
+
+    for world in (2, 8, 16, 128, 512):
+        for S in (2 ** 12, 2 ** 20, 2 ** 26, 2 ** 33):
+            x = S / world
+            wire = S * (world - 1) / world
+            saturating = wire / (BETA_FLAT * x / (x + X_HALF_FLAT) * 1e6)
+            per_message = (wire / (BETA_FLAT * 1e6)
+                           + (world - 1) * X_HALF_FLAT / (BETA_FLAT * 1e6))
+            assert saturating == pytest.approx(per_message, rel=1e-12), (
+                "world %d, %d bytes: the identity is exact or the reading of x_half "
+                "in calibrate.py is wrong" % (world, S))
+
+    assert PER_PEER_MESSAGE_US == pytest.approx(0.469, abs=0.001)
+
+    # and what it buys two-hop: 127 peer messages against 15 + 7
+    one_hop, hop_a, hop_b = 128 - 1, 16 - 1, 8 - 1
+    assert hop_a + hop_b == 22
+    assert one_hop * PER_PEER_MESSAGE_US / 1000 == pytest.approx(0.060, abs=0.001)
+    assert (hop_a + hop_b) * PER_PEER_MESSAGE_US / 1000 == pytest.approx(0.010, abs=0.001)
+
+
+def test_marginal_bandwidth_is_model_free_and_depends_on_world():
+    """Delivered bandwidth read off the data, and the world-dependence it exposes.
+
+    No alpha, no x_half, no model form: the slope of wall clock against wire bytes at
+    the top of a sweep. Both machines dip at world 16 and rise from there, and both sit
+    below the shipped beta_inf almost everywhere, which the single-beta model absorbs
+    into the per-world alpha.
+    """
+    from sim.calibrate import (BETA_FLAT, MARGINAL_BW_BY_WORLD,
+                               MARGINAL_BW_SECOND_MACHINE)
+    from sim.fit import marginal_bandwidth
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D
+
+    a = marginal_bandwidth([(w, s, ms) for w, s, ms, _r in
+                            TARGETS_A + TARGETS_C + TARGETS_D])
+    b = marginal_bandwidth([(w, s, ms) for w, s, ms, _r in TARGETS_B])
+    for world, doc in MARGINAL_BW_BY_WORLD.items():
+        assert a[world] == pytest.approx(doc, abs=0.1), (
+            "machine A world %d: %.1f against the tabulated %.1f" % (world, a[world], doc))
+    for world, doc in MARGINAL_BW_SECOND_MACHINE.items():
+        assert b[world] == pytest.approx(doc, abs=0.1)
+
+    # the shape, on both machines independently: a dip at world 16, then rising
+    assert a[16] < a[8] < a[128]
+    assert b[16] < b[8] < b[32] and b[64] < b[128]
+    # and almost everywhere below the beta the model applies at every world at once
+    assert a[8] < BETA_FLAT and a[16] < BETA_FLAT
+    assert all(v < BETA_FLAT for v in b.values())
+
+    # two points are a difference, not a slope: at n_top=2 machine A's world 128 reads
+    # above the 122.4 per-card physical ceiling, and settles below it by n_top=4
+    coarse = marginal_bandwidth([(w, s, ms) for w, s, ms, _r in TARGETS_A], n_top=2)
+    assert coarse[128] > 122.4 > a[128]
+
+
+def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
+    """The sensitivity is real, sizeable, and points away from the method.
+
+    One hop runs at the full world where delivery is best; both two-hop hops run at
+    small worlds where it is worst. Giving each level its measured bandwidth therefore
+    raises the threshold at every implementation tier. It is a sensitivity and not a
+    recalibration -- see the docstring -- but the direction is the point.
+    """
+    from sim.profile import bandwidth_world_sensitivity
+
+    rows = bandwidth_world_sensitivity()
+    assert len(rows) == 3
+    for _name, shipped, per_world in rows:
+        assert per_world > shipped, (
+            "the measured world-dependence must make two-hop look worse, not better")
+    for (_n, shipped, per_world), doc in zip(rows, ((3.98, 4.52), (1.49, 1.78),
+                                                   (1.10, 1.34))):
+        assert shipped == pytest.approx(doc[0], abs=0.01)
+        assert per_world == pytest.approx(doc[1], abs=0.01)
+    # and it displaces the threshold further than the measured launch cost does
+    assert rows[0][2] - rows[0][1] > 4.15 - 3.98
+
+
+def test_the_overlap_form_fits_better_and_is_still_not_adopted():
+    """A rejected model form, pinned so the road is not walked twice.
+
+    Combining the fixed cost with the transfer in quadrature instead of adding them
+    cuts the median error to a third on machine A at identical parameter count, and
+    machine B reproduces the direction independently. It was still rejected: it
+    predicts a held-out world worse and it fits the Tier-1 benchmark family worse.
+    What the experiment established is that the two benchmark families differ in
+    shape and not only in level.
+
+    The test pins both halves. If the fit advantage ever disappears the record above
+    is wrong; if the shipped model ever stops being additive, that is a decision that
+    has to be taken deliberately and not by drift.
+    """
+    from sim.fit import compare_forms
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D
+
+    a = compare_forms([(w, s, ms) for w, s, ms, _r in
+                       TARGETS_A + TARGETS_C + TARGETS_D], exponents=(1.0, 2.0))
+    b = compare_forms([(w, s, ms) for w, s, ms, _r in TARGETS_B],
+                      exponents=(1.0, 2.0))
+    assert a["additive (shipped)"]["median"] == pytest.approx(0.078, abs=0.004)
+    assert a["quadrature"]["median"] == pytest.approx(0.026, abs=0.004)
+    assert b["additive (shipped)"]["median"] == pytest.approx(0.093, abs=0.004)
+    assert b["quadrature"]["median"] == pytest.approx(0.071, abs=0.004)
+    assert a["quadrature"]["median"] < a["additive (shipped)"]["median"] / 2
+    assert b["quadrature"]["median"] < b["additive (shipped)"]["median"]
+
+    # the shipped model is still the additive one, and core.py still implements it.
+    # The tolerance is the 48-point log-spaced table calibrate.saturating_beta samples
+    # the analytic curve into, not slack in the identity: the table tracks the exact
+    # form to better than a tenth of a percent over the range the model is used in,
+    # and this assertion is what would notice if that grid were ever coarsened.
+    from sim.calibrate import BETA_FLAT, X_HALF_FLAT, flat_supernode
+    from sim.core import MoEGeometry, one_hop_call
+    c = flat_supernode()
+    g = MoEGeometry(name="add", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
+                    gbs=16 * 8 * 4096)
+    wire = g.tokens_per_rank * g.k * g.row_bytes() * (1 - 1.0 / g.ep)
+    additive = c.flat.alpha_ms(g.ep) + wire / (BETA_FLAT * 1e6) + (g.ep - 1) * (
+        X_HALF_FLAT / (BETA_FLAT * 1e6))
+    assert one_hop_call(c, g) == pytest.approx(additive, rel=1e-3)
+
+
 def test_arrival_chain_is_only_linear_above_the_measured_floor():
     """The chain constant carries the whole verdict, so its limits are pinned.
 

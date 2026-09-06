@@ -184,6 +184,40 @@ claim("docs/05-simulator.md",
       "tier the geometry axis widens to {n}",
       lambda: [_geom(0)], 0.005)
 
+# -- docs/05: what x_half is, and the two experiments run against the model -----
+
+claim("docs/05-simulator.md",
+      "that cost: **{n} microseconds** here.",
+      lambda: [_per_peer_us()], 0.0005)
+
+claim("docs/05-simulator.md",
+      "the full fabric sends **{n}** peer messages; Hop A sends {n} and Hop B {n}, "
+      "so the swap pays **{n}** of them instead of {n}.",
+      lambda: [127, 15, 7, 22, 127], 0.0)
+
+claim("docs/05-simulator.md",
+      "that is {n} ms against {n} ms per call.",
+      lambda: [127 * _per_peer_us() / 1000, 22 * _per_peer_us() / 1000], 0.0005)
+
+claim("docs/05-simulator.md",
+      "| platform A, GB/s | {n} | {n} | — | — | {n} |",
+      lambda: _marginal("A"), 0.5)
+
+claim("docs/05-simulator.md",
+      "| platform B, GB/s | {n} | {n} | {n} | {n} | {n} |",
+      lambda: _marginal("B"), 0.5)
+
+claim("docs/05-simulator.md",
+      "| PyTorch chain (measured) | {n} | **{n}** | "
+      "| hypothetical fused target | {n} | {n} | "
+      "| zero implementation overhead | {n} | {n} |",
+      lambda: [v for row in _bw_sensitivity() for v in row], 0.005)
+
+claim("docs/05-simulator.md",
+      "| additive (shipped) | {n}% | {n}% | baseline | "
+      "| quadrature | **{n}%** | **{n}%** | same as shipped |",
+      lambda: [100 * v for v in _form_medians()], 0.4)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -253,6 +287,37 @@ claim("docs/05-simulator.md",
 claim("docs/05-simulator.md",
       "adopting the sweep's level instead would put the reference threshold at {n}.",
       lambda: [_sweep_level_breakeven()], 0.005)
+
+
+def _per_peer_us():
+    from sim.calibrate import PER_PEER_MESSAGE_US
+    return PER_PEER_MESSAGE_US
+
+
+def _marginal(machine):
+    from sim.fit import marginal_bandwidth
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D
+    tg = (TARGETS_A + TARGETS_C + TARGETS_D) if machine == "A" else TARGETS_B
+    bw = marginal_bandwidth([(w, s, ms) for w, s, ms, _r in tg])
+    return [bw[w] for w in sorted(bw)]
+
+
+def _bw_sensitivity():
+    from sim.profile import bandwidth_world_sensitivity
+    return [(shipped, per_world)
+            for _name, shipped, per_world in bandwidth_world_sensitivity()]
+
+
+def _form_medians():
+    """additive and quadrature medians on machine A then machine B, in table order."""
+    from sim.fit import compare_forms
+    from sim.validate_sweep import TARGETS_A, TARGETS_B, TARGETS_C, TARGETS_D
+    a = compare_forms([(w, s, ms) for w, s, ms, _r in
+                       TARGETS_A + TARGETS_C + TARGETS_D], exponents=(1.0, 2.0))
+    b = compare_forms([(w, s, ms) for w, s, ms, _r in TARGETS_B],
+                      exponents=(1.0, 2.0))
+    return [a["additive (shipped)"]["median"], b["additive (shipped)"]["median"],
+            a["quadrature"]["median"], b["quadrature"]["median"]]
 
 
 def _chain_sweep_ms():
