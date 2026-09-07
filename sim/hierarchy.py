@@ -30,6 +30,17 @@ model, no fit, no assumption enters the comparison.
 
 ## The result
 
+> **Correction and extension (2026-09-07).** The ratio first reported here, 2.55, was
+> measured with exactly one node pair crossing the boundary, which is the least
+> contended case there is. A follow-up run with 1, 2, 4 and 8 pairs crossing
+> concurrently -- identical work in every subgroup, so only the pressure changes --
+> shows a single pair gets substantially more than its share. Per-card cross-rack
+> bandwidth is 39.7 GB/s with one pair and 22.2 to 22.4 with two or more, flat to 1%
+> from 2 pairs to 8. So **2.55 understates the hierarchy**; the like-for-like figure at
+> a world both configurations can be compared at is **3.47** (below). The original
+> number is kept because it is what a single pair measures and because the gap between
+> the two is the contention term the cost model does not have.
+
 Marginal bandwidth, regressed on the largest four sizes, in both timing styles:
 
     within rack     102.7 GB/s burst   102.1 GB/s percall
@@ -50,16 +61,35 @@ say which.
 
 ## What it decides, and what it does not
 
-2.55 clears the byte-only criterion at the rack boundary comfortably. With R = 128
-cards in a rack, `r_be = (1-1/R)q/(q-1)` is 1.98 at q = 2 and 1.49 at q = 3, so every
-quota from 2 up passes, the loosest by 136%.
+Use **3.47**, the loaded like-for-like figure: the shipped `BETA_FLAT` of 117.8 is a
+world-128 a2a inside one rack, and 33.9 GB/s is the same collective spanning both,
+measured in the same session. Both are full-rack loads and both are the same world,
+which the single-pair comparison is not.
 
-It then lands **between the two implementation thresholds this repository publishes**:
-3.98 for the measured PyTorch arrival chain and 1.49 for the hypothetical fused one.
-That is the whole point. On this boundary the topology is good enough and the arrival
-chain is what decides, which is the thing docs/05 has been saying from synthetic
-numbers -- fix the implementation first, then talk topology -- now resting on a
-measured ratio.
+It clears the byte-only criterion at the rack boundary with room to spare. With R = 128
+cards in a rack, `r_be = (1-1/R)q/(q-1)` is 1.98 at q = 2 and 1.49 at q = 3, so every
+quota from 2 up passes.
+
+Against the effective thresholds it depends on hidden width, and that dependence is the
+result worth carrying:
+
+    H = 1024    threshold 5.95    not cleared
+    H = 2048    threshold 3.98    not cleared
+    H = 4096    threshold 2.89    **cleared**
+    H = 8192    threshold 2.40    **cleared**
+
+The threshold falls with H because the payload grows by four over a fourfold widening
+while the arrival chain grows by 1.5. So at the reference width the arrival chain still
+decides, and **at the widths contemporary models actually use -- 7168 in DeepSeek-V3,
+which docs/12 prices -- the measured boundary clears the threshold for the operator
+chain this repository already has.** That is the first configuration in this project
+where the model says two-hop wins with software that exists.
+
+The contention measurement is what makes that statement stronger rather than weaker,
+which was not the expected direction. Pressure on the boundary lowers the slow side,
+and two-hop exists to send fewer bytes across the slow side, so a more contended
+boundary favours it. The naive worry -- that real expert parallelism would collapse the
+boundary and sink the verdict -- is refuted by the flatness from 2 pairs to 8.
 
 Three limits, stated rather than buried.
 
@@ -117,6 +147,28 @@ WORLD = 16
 CARDS_PER_RACK = 128
 INTRA_NODE_GBPS = 122.4          # physics-endorsed, docs/05
 
+#: Measured intra-node a2a, world 8, one node, wire-byte convention, 2026-09-06.
+#: Note it is 17% below INTRA_NODE_GBPS above, which the calibration calls the most
+#: stable number in the dataset. Either the two use different byte conventions or the
+#: fast tier is over-credited; the tier Hop B runs on, so it matters. Recorded.
+INTRA_NODE_MEASURED_GBPS = 101.1
+
+#: Contention: (pairs crossing concurrently, marginal GB/s of the subgroup a2a).
+#: Sixteen nodes, eight per rack, node i paired with node i+8, every pair doing the
+#: identical world-16 a2a already characterised above, with only the number of active
+#: pairs changed. 2026-09-07. A single pair gets 39.7; from two pairs upward every
+#: pair settles at 22 and stays there, flat to 1% out to eight. The boundary is not a
+#: narrow shared pipe -- aggregate throughput scales 1.23, 2.45, 4.93 at 2, 4, 8 pairs,
+#: perfectly linear once past the first step -- but a single crossing pair does get
+#: capacity that is not available to it once anyone else is crossing.
+CONTENTION = [(1, 39.7), (2, 22.2), (4, 22.1), (8, 22.4)]
+
+#: A single a2a over all 128 ranks spanning both racks, same session: 33.9 GB/s
+#: marginal. This is the like-for-like partner to the shipped BETA_FLAT of 117.8, which
+#: is a world-128 a2a inside one rack, and the two give the loaded hierarchy ratio.
+CROSS_RACK_WORLD128_GBPS = 33.9
+LOADED_RATIO = 3.47
+
 #: The headline, both timing styles, from the largest four sizes.
 RATIO_BURST = 2.58
 RATIO_PERCALL = 2.55
@@ -163,6 +215,36 @@ def remote_tier_gbps(config: str, style: str = "percall") -> float:
     return (8.0 / (WORLD - 1)) / (1.0 / eff - share_intra)
 
 
+def contention_penalty() -> float:
+    """How much a crossing pair loses once it is not the only one crossing."""
+    d = dict(CONTENTION)
+    return d[1] / d[8]
+
+
+def loaded_ratio() -> float:
+    """The hierarchy ratio like-for-like at world 128, which is the one to use.
+
+    The fast side is the shipped BETA_FLAT, a world-128 a2a inside one rack. The slow
+    side is the same collective spanning both racks, measured in the same session. Both
+    are full-rack loads, so neither is the privileged single-pair case, and they are the
+    same world -- which the world-16 pair comparison is not.
+    """
+    from .calibrate import BETA_FLAT
+    return BETA_FLAT / CROSS_RACK_WORLD128_GBPS
+
+
+def clears_at_hidden_width() -> list:
+    """[(H, threshold, whether the loaded ratio clears it)] for the measured chain.
+
+    The threshold falls with hidden width because the payload grows by four over a
+    fourfold widening while the arrival chain grows by 1.5. Contemporary models sit
+    well above the reference width, which is where this matters.
+    """
+    from .uncertainty import breakeven_vs_hidden_width
+    r = loaded_ratio()
+    return [(H, be, r >= be) for H, be in breakeven_vs_hidden_width()]
+
+
 def byte_breakeven_at_rack(q: int) -> float:
     """The byte-only criterion with a whole rack as the fast domain."""
     from .profile import byte_breakeven
@@ -182,6 +264,27 @@ def placement() -> dict:
 
 
 def main() -> None:
+    print("CONTENTION: identical work per pair, only the number of crossing pairs moves")
+    for n, bw in CONTENTION:
+        print("   %d pair(s) crossing   %5.1f GB/s per card%s"
+              % (n, bw, "   <- a single pair gets more than its share" if n == 1 else
+                 ("   flat from here" if n == 2 else "")))
+    print("   penalty once you are not alone: %.2fx; nothing further out to 8 pairs"
+          % contention_penalty())
+    print()
+    print("LOADED HIERARCHY RATIO, like-for-like at world 128:")
+    from .calibrate import BETA_FLAT
+    print("   within one rack (shipped BETA_FLAT)   %5.1f GB/s" % BETA_FLAT)
+    print("   across both racks (measured)          %5.1f GB/s" % CROSS_RACK_WORLD128_GBPS)
+    print("   ratio                                 %5.2f" % loaded_ratio())
+    print()
+    print("   against the measured-chain threshold, by hidden width:")
+    for H, be, ok in clears_at_hidden_width():
+        print("      H=%5d  threshold %.2f   %s"
+              % (H, be, "CLEARED" if ok else "not cleared"))
+    print("   so at the widths contemporary models use, the boundary clears the")
+    print("   threshold for the arrival chain this repository already has.")
+    print()
     print("The rack boundary, measured. World 16 both ways, eight ranks on each of two")
     print("nodes, identical structure; the only difference is whether the eight remote")
     print("peers are in the same rack.")

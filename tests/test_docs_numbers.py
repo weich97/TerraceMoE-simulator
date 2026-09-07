@@ -243,6 +243,19 @@ claim("docs/03-applicability.md",
       "puts the pure tiers at {n} against {n} GB/s, a ratio of {n}.",
       lambda: [_rack()[3], _rack()[4], _rack()[5]], 0.6)
 
+claim("docs/03-applicability.md",
+      "| per-card cross-rack GB/s | {n} | {n} | {n} | {n} |",
+      lambda: [bw for _n, bw in _contention()], 0.05)
+
+claim("docs/03-applicability.md",
+      "delivers {n} GB/s inside a rack (the shipped constant) against **{n} GB/s "
+      "measured across both**, a ratio of **{n}**",
+      lambda: _loaded(), 0.02)
+
+claim("docs/03-applicability.md",
+      "| threshold, measured operator chain | {n} | {n} | **{n}** | **{n}** |",
+      lambda: [be for _H, be, _ok in _hw()], 0.006)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -387,6 +400,22 @@ def _regime_alpha():
     from sim.hostregime import compare_styles
     return {w: round(v, 3)
             for w, v in compare_styles()["burst"]["quadrature"]["alpha"].items()}
+
+
+def _contention():
+    from sim.hierarchy import CONTENTION
+    return CONTENTION
+
+
+def _loaded():
+    from sim.calibrate import BETA_FLAT
+    from sim.hierarchy import CROSS_RACK_WORLD128_GBPS, loaded_ratio
+    return [BETA_FLAT, CROSS_RACK_WORLD128_GBPS, loaded_ratio()]
+
+
+def _hw():
+    from sim.hierarchy import clears_at_hidden_width
+    return clears_at_hidden_width()
 
 
 def _rack():

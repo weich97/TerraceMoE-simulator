@@ -874,6 +874,47 @@ def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
     assert p["decided_by_the_chain"]
 
 
+def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
+    """Contention at the rack boundary, and which way it points.
+
+    A single crossing pair is the least contended case there is, so the first ratio
+    measured was optimistic about the slow side -- which means it understated the
+    hierarchy, not overstated it. The follow-up holds the work identical in every
+    subgroup and varies only how many pairs cross at once.
+
+    The naive worry was that real expert parallelism, crossing with every node at once,
+    would collapse the boundary and sink the verdict. It does not: one step, then flat.
+    And the step pushes the other way from the worry, because pressure lowers the slow
+    side and two-hop exists to send fewer bytes across the slow side.
+    """
+    from sim.calibrate import BETA_FLAT
+    from sim.hierarchy import (CONTENTION, CROSS_RACK_WORLD128_GBPS, LOADED_RATIO,
+                               clears_at_hidden_width, contention_penalty,
+                               hierarchy_ratio, loaded_ratio)
+
+    d = dict(CONTENTION)
+    # a single pair gets more than its share, and the penalty lands in one step
+    assert d[1] > 1.5 * d[8]
+    assert 1.6 < contention_penalty() < 2.0
+    # and then nothing: flat from two pairs to eight, which is what says the boundary
+    # is not a narrow shared pipe
+    for n in (4, 8):
+        assert abs(d[n] - d[2]) / d[2] < 0.03, (
+            "%d pairs moved %.1f%% from 2 -- if the boundary starts collapsing, the "
+            "verdict this module records has to be retaken" % (n, 100 * abs(d[n] - d[2]) / d[2]))
+
+    # the loaded ratio is the like-for-like one and is larger than the single-pair one
+    assert loaded_ratio() == pytest.approx(LOADED_RATIO, abs=0.01)
+    assert loaded_ratio() == pytest.approx(BETA_FLAT / CROSS_RACK_WORLD128_GBPS, rel=1e-6)
+    assert loaded_ratio() > hierarchy_ratio(), (
+        "contention makes the hierarchy deeper, not shallower")
+
+    # and it clears the operator-chain threshold at the widths real models use
+    rows = clears_at_hidden_width()
+    assert [H for H, _b, ok in rows if ok] == [4096, 8192]
+    assert not any(ok for H, _b, ok in rows if H <= 2048)
+
+
 def test_the_host_regime_decides_which_rule_a_collective_obeys():
     """The measurement that closed the open question, pinned.
 

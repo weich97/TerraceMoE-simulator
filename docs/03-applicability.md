@@ -69,4 +69,23 @@ As of our survey (2026-08), wherever a rack-level/supernode-level high-bandwidth
 
 **We measured it.** The machine the negative result above was taken on is two racks, and the seven geometries all ran inside one of them, where the ratio is 1.03 and there is nothing for two-hop to buy. Crossing the boundary is a different machine in the only sense that matters here: an all-to-all of identical structure, same world, same sizes, same session, delivers 102 GB/s within a rack and 40 across, a **measured hierarchy ratio of 2.55** ([sim/hierarchy.py](../sim/hierarchy.py), instrument in [bench/a2a_form_probe.py](../bench/a2a_form_probe.py)). Deconvolving the intra-node share puts the pure tiers at 89 against 25 GB/s, a ratio of 3.54.
 
-That ratio clears the byte criterion at every quota — with a rack as the fast domain, R = 128, so q=3 needs only 1.49 — and then lands between this repository's two implementation thresholds, 1.49 fused and 3.98 for the measured operator chain. **On this boundary the topology is good enough and the arrival chain is what decides.** Three things it is not: an end-to-end verdict, because expert parallelism across two racks is 256 cards and α past world 128 is unsupported; a statement about incast, which is untouched; and a reason to reread the negative result above, which was taken inside a rack and stands exactly as measured.
+**And then we measured the contention**, because a single crossing pair is the least contended case there is and real expert parallelism crosses with every node at once. Sixteen nodes, eight per rack, each pair doing the identical world-16 a2a, with only the number of active pairs changed:
+
+| pairs crossing concurrently | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|
+| per-card cross-rack GB/s | 39.7 | 22.2 | 22.1 | 22.4 |
+
+There is no collapse. A single pair gets more than its share; from two pairs upward every pair settles at 22 GB/s and stays there, flat to 1% out to eight, with aggregate throughput scaling perfectly linearly over that range. The boundary is not a narrow shared pipe. **So the 2.55 above understates the hierarchy**, and the figure to use is the like-for-like one at a world both configurations share: a world-128 a2a delivers 117.8 GB/s inside a rack (the shipped constant) against **33.9 GB/s measured across both**, a ratio of **3.47**.
+
+That clears the byte criterion at every quota — with a rack as the fast domain, R = 128, so q=3 needs only 1.49. Against the effective thresholds it depends on hidden width, and that is the result worth carrying:
+
+| hidden width | 1024 | 2048 | 4096 | 8192 |
+|---|---:|---:|---:|---:|
+| threshold, measured operator chain | 5.95 | 3.98 | **2.89** | **2.40** |
+| 3.47 clears it | no | no | **yes** | **yes** |
+
+At the reference width the arrival chain still decides. **At the widths contemporary models actually use — 7168 in DeepSeek-V3 — the measured boundary clears the threshold for the operator chain this repository already has.** That is the first configuration here where the model says two-hop wins with software that exists rather than software that would have to be written.
+
+Note which way the contention pushed. Pressure lowers the slow side, and two-hop exists to send fewer bytes across the slow side, so a more contended boundary favours it; the worry that real expert parallelism would sink the verdict is refuted rather than confirmed.
+
+Three things this is not: an end-to-end verdict, because expert parallelism across two racks is 256 cards and α past world 128 is unsupported, and because the two-hop chain itself has not been measured across the boundary; a step-time claim, which Tier-2 forbids; and a reason to reread the negative result above, which was taken inside a rack and stands exactly as measured.
