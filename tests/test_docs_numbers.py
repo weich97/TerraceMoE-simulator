@@ -256,6 +256,15 @@ claim("docs/03-applicability.md",
       "| threshold, measured operator chain | {n} | {n} | **{n}** | **{n}** |",
       lambda: [be for _H, be, _ok in _hw()], 0.006)
 
+claim("docs/05-simulator.md",
+      "| cross-node | {n} GB/s | {n} GB/s at 120 | | cross-rack | {n} GB/s | {n} GB/s at 64 |",
+      lambda: _tier_table(), 0.05)
+
+claim("docs/05-simulator.md",
+      "it predicts {n} GB/s for a world-128 all-to-all spanning both racks; the "
+      "measurement is {n}.",
+      lambda: _oos(), 0.05)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -400,6 +409,17 @@ def _regime_alpha():
     from sim.hostregime import compare_styles
     return {w: round(v, 3)
             for w, v in compare_styles()["burst"]["quadrature"]["alpha"].items()}
+
+
+def _tier_table():
+    from sim.tiers import TIER_BY_PEERS as T
+    return [T[("cross_node", 8)], T[("cross_node", 120)],
+            T[("cross_rack", 8)], T[("cross_rack", 64)]]
+
+
+def _oos():
+    from sim.tiers import OUT_OF_SAMPLE as O
+    return [O["predicted_gbps"], O["measured_gbps"]]
 
 
 def _contention():

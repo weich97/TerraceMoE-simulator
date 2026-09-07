@@ -874,6 +874,61 @@ def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
     assert p["decided_by_the_chain"]
 
 
+def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
+    """A structural improvement that was tested and only partly adopted.
+
+    Pricing a collective from per-tier link bandwidths instead of one beta per named
+    level is the obvious fix for a model whose load-bearing comparison spans three
+    different mixtures of links. It composes within a world and misses the world it was
+    not calibrated on by 31%, because a tier delivers more per card when more peers use
+    it. The peer counting is adopted, being exact arithmetic; the composition is not.
+
+    Pinned because the failure is the finding, and because the same effect charges
+    two-hop specifically: Hop A spreads the slow tier over the fewest peers of anything
+    in the scheme, and at a coarse hierarchy that is below anything measured.
+    """
+    from sim.tiers import (CROSS_RACK_8_PEERS_UNCONTENDED, OUT_OF_SAMPLE,
+                           TIER_BY_PEERS, Topology, compose, hop_a_peer_count,
+                           peer_counts, tier_at)
+
+    topo = Topology()
+    # the peer counts are arithmetic and must reproduce every measured configuration
+    assert peer_counts(topo, 8, 1) == {"intra_node": 7}
+    assert peer_counts(topo, 16, 2) == {"intra_node": 7, "cross_node": 8}
+    assert peer_counts(topo, 16, 1) == {"intra_node": 7, "cross_rack": 8}
+    assert peer_counts(topo, 128, 8) == {"intra_node": 7, "cross_node": 56,
+                                         "cross_rack": 64}
+    assert peer_counts(topo, 128, 16) == {"intra_node": 7, "cross_node": 120}
+    for world, npr in ((8, 1), (16, 1), (16, 2), (128, 8), (128, 16)):
+        assert sum(peer_counts(topo, world, npr).values()) == world - 1
+
+    # calibrate the three constants on world 16 and ask about world 128
+    intra = TIER_BY_PEERS[("intra_node", 7)]
+    fixed = {"intra_node": intra,
+             "cross_node": TIER_BY_PEERS[("cross_node", 8)],
+             "cross_rack": TIER_BY_PEERS[("cross_rack", 8)]}
+    pred = compose(peer_counts(topo, 128, 8), fixed)
+    assert pred == pytest.approx(OUT_OF_SAMPLE["predicted_gbps"], abs=0.6)
+    err = pred / OUT_OF_SAMPLE["measured_gbps"] - 1
+    assert err < -0.25, (
+        "the fixed-per-tier composition used to miss world 128 by -31%%; it now misses "
+        "by %+.0f%%. If it stopped missing, the peer-count effect this module records "
+        "is not there and the composition should be adopted." % (100 * err))
+
+    # and the reason: both tiers deliver more per card at more peers
+    assert TIER_BY_PEERS[("cross_node", 120)] > TIER_BY_PEERS[("cross_node", 8)]
+    assert TIER_BY_PEERS[("cross_rack", 64)] > TIER_BY_PEERS[("cross_rack", 8)]
+    # peer spread and concurrent load are separate: same peers, different company
+    assert CROSS_RACK_8_PEERS_UNCONTENDED > 1.8 * TIER_BY_PEERS[("cross_rack", 8)]
+
+    # interpolation is allowed between measured peer counts and refused below them,
+    # which is exactly the regime Hop A runs in
+    assert TIER_BY_PEERS[("cross_rack", 8)] < tier_at("cross_rack", 24) < TIER_BY_PEERS[("cross_rack", 64)]
+    with pytest.raises(ValueError):
+        tier_at("cross_rack", 1)
+    assert hop_a_peer_count(2) == 1 and hop_a_peer_count(16) == 15
+
+
 def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
     """Contention at the rack boundary, and which way it points.
 

@@ -471,6 +471,50 @@ redden (C) are the pair this repository already refuses to choose between. What 
 that this is no longer one reading against another: it is two against a table entry, and the
 next recalibration should start there.
 
+### Pricing a collective from its tiers: tested, and only partly adopted
+
+The model gives each named level one bandwidth, calibrated per configuration. That is a
+fiction in the load-bearing place, because the comparison this repository exists to make
+prices one hop over the whole fabric against a Hop A on the pure slow tier and a Hop B
+on the pure fast tier — three different mixtures of physical links, each given a β
+calibrated on a fourth.
+
+The obvious fix is to price from the topology: count how many of a rank's peers sit
+inside its node, elsewhere in its rack and in another rack, and compose from per-tier
+link bandwidths. `sim/tiers.py` implements it and tests it.
+
+**It composes within a world and misses the world it was not calibrated on by 31%.**
+Calibrated on the world-16 configurations it predicts 23.4 GB/s for a world-128
+all-to-all spanning both racks; the measurement is 33.9. Reading the implied tier
+bandwidth back out of each configuration says why:
+
+| tier | at 8 peers | at many peers |
+|---|---:|---:|
+| cross-node | 103.0 GB/s | 118.9 GB/s at 120 |
+| cross-rack | 13.3 GB/s | 20.0 GB/s at 64 |
+
+**A tier delivers more per card when the collective spreads its bytes over more peers**,
+and the pattern holds on both tiers independently — path diversity and link filling.
+A second variable separates in the same data: holding peers at eight and varying only
+how many nodes cross concurrently, cross-rack falls from 25.9 GB/s alone to 13.3 in
+company. So delivered bandwidth depends on how widely the bytes are spread *and* how
+much company they have, and the model has a term for neither.
+
+The peer counting is adopted, being exact arithmetic. The composition is **not**, because
+a model that misses an out-of-sample configuration by 31% is not an improvement on one
+calibrated per configuration — it is the same error moved somewhere less honest. Both
+tiers do fit `β = β∞·n/(n + n_half)`, the same saturating shape already used for message
+size, but on two points per tier that is interpolation with nothing left over to test it,
+so it ships as a hypothesis with the measurement that would falsify it.
+
+**Why this matters more to two-hop than to one-hop.** Hop A runs at world = group count,
+so it spreads the slow tier over the fewest peers of any collective in the scheme; one
+hop spreads the same tier over the most. The effect therefore charges two-hop and credits
+one-hop, and hardest where the hierarchy is coarsest — a two-rack machine gives Hop A a
+single cross-rack peer, below anything measured. It is unpriced, it points against the
+method, and it is the first thing to measure before the rack-boundary result in
+[docs/03](03-applicability.md) is treated as settled.
+
 ## Payload: what the model varies, and what it deliberately does not
 
 The cost of a call is driven by payload, so it is worth being explicit about which
@@ -607,6 +651,8 @@ python -m sim.platforms          # calibrated platforms + where the methods pay 
 python -m sim.profile            # is a given machine worth it, and which condition decides
 python -m sim.phase              # phase spans; refuses step time until calibrated (docs/09)
 python -m sim.hostregime         # which rule each timing style wants, and why it matters
+python -m sim.hierarchy          # the measured rack boundary, and contention on it
+python -m sim.tiers              # pricing a collective from its tiers: where it breaks
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)
 python -m sim.overlap            # Tier-2 campaign: overlap model family battle report (docs/07)
