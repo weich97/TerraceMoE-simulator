@@ -58,6 +58,53 @@ from .core import ClusterSpec, Level
 ALPHA_PTS = [(2, 0.09), (8, 0.111), (16, 0.157), (128, 0.378),
              (256, 0.735), (512, 1.859)]
 
+#: Which host regime the table above belongs to, and why that has to be said.
+#:
+#: sim/hostregime.py measured the same collective in both regimes and found they obey
+#: different rules and carry different fixed costs: with the host running ahead,
+#: alpha is 0.114 ms at world 8 and 0.120 at world 16; with the host observing each
+#: call it is 0.229 and 0.261. A factor of two, and the table has to be one or the
+#: other. The world-8 entry, 0.111, is the deep-queue value to three digits. So
+#: **the table is a deep-queue table**, which is what its own provenance note says,
+#: and the model applies it under the additive rule that belongs to the other regime.
+ALPHA_REGIME = "deep queue (host runs ahead)"
+
+#: Directly measured per regime, worlds 8 and 16 only (sim/hostregime.py, 2026-09-06).
+#: These are not shipped as the calibration; they are here so the mismatch above is a
+#: number rather than a remark, and so a recalibration has somewhere to start.
+ALPHA_BY_REGIME = {
+    "deep queue": {8: 0.114, 16: 0.120},
+    "host exposed": {8: 0.229, 16: 0.261},
+}
+
+#: What a joint fit of (alpha, beta, per-peer cost) to the size-sweep corpora returns,
+#: under the additive rule the model uses. Recorded because of what comes with it.
+#:
+#:   corpus C, world 16   alpha 0.157   beta_inf 131.8 GB/s
+#:   corpus D, world  8   alpha 0.119   beta_inf 152.7 GB/s
+#:
+#: Corpus C reproduces the tabulated 0.157 exactly -- and pairs it with a bandwidth of
+#: 131.8, above the 122.4 GB/s per-card aggregate egress this file endorses as physics.
+#: Corpus D needs 152.7. **So 0.157 is not an independent measurement of alpha; it is
+#: the alpha that compensates for a beta the machine cannot deliver.** Directly
+#: measuring the same machine in the regime the additive rule belongs to gives
+#: (0.261, 105.8) instead, which is inside the envelope.
+#:
+#: This is the same fact hostregime.py found from the other side: the size-sweep
+#: corpora do not obey the additive rule, and forcing it on them shows up as a
+#: bandwidth above the physical ceiling and an alpha bent to match. Four benchmarks now
+#: put alpha(16) between 0.120 and 0.261 with a step over alpha(8) of 4 to 14 percent,
+#: against the table's 41.
+#:
+#: Nothing moves here. The pair cannot be swapped in piecemeal -- alpha and beta are
+#: degenerate, which is the whole reason fit.py insists on pinning alpha -- and a
+#: recalibration would have to redo the gates under a rule and a regime chosen
+#: deliberately. What this replaces is a puzzle: alpha(16) was recorded as one reading
+#: against another, and it is now a fitted artefact with a physical reason.
+ALPHA_CORPUS_JOINT_FIT = {"C": {"world": 16, "alpha": 0.157, "beta_inf": 131.8},
+                          "D": {"world": 8, "alpha": 0.119, "beta_inf": 152.7}}
+PHYSICAL_CEILING_GBPS = 122.4
+
 # beta [GB/s] (aligned convention: per-peer bytes are integer multiples of the real row
 # width; unaligned sizes fall into implementation behavior that steps by powers of 2,
 # and you end up measuring the alignment effect, not the link -- we stepped on this).

@@ -874,6 +874,58 @@ def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
     assert p["decided_by_the_chain"]
 
 
+def test_alpha_16_is_a_fitted_artefact_not_a_measurement():
+    """Why the world-16 fixed cost never agreed with anything, resolved.
+
+    alpha(16) = 0.157 has sat in the table disagreeing with an independent call-count
+    scan, and docs/05 recorded it as one reading against another with no way to choose.
+    It is now four benchmarks against one table entry, and the entry has an explanation:
+    a joint fit of the additive rule to the size-sweep corpus reproduces 0.157 exactly,
+    and pairs it with a bandwidth the machine cannot deliver.
+
+    The two halves are pinned together because neither means much alone. An alpha that
+    only fits alongside an impossible beta is not a measurement of alpha.
+    """
+    from sim.calibrate import (ALPHA_BY_REGIME, ALPHA_CORPUS_JOINT_FIT, ALPHA_PTS,
+                               ALPHA_REGIME, PHYSICAL_CEILING_GBPS)
+
+    tab = dict(ALPHA_PTS)
+
+    # the table is a deep-queue table, and its world-8 entry says so to three digits
+    assert "deep queue" in ALPHA_REGIME
+    assert tab[8] == pytest.approx(ALPHA_BY_REGIME["deep queue"][8], abs=0.005)
+
+    # the two regimes differ by about a factor of two, which is why the table has to
+    # declare which one it is
+    for w in (8, 16):
+        ratio = ALPHA_BY_REGIME["host exposed"][w] / ALPHA_BY_REGIME["deep queue"][w]
+        assert 1.8 < ratio < 2.3, "world %d regime ratio %.2f" % (w, ratio)
+
+    # the tabulated world-16 entry matches neither regime, and sits between them
+    assert (ALPHA_BY_REGIME["deep queue"][16] < tab[16]
+            < ALPHA_BY_REGIME["host exposed"][16])
+
+    # every direct measurement puts the step from world 8 to 16 far below the table's
+    for regime, a in ALPHA_BY_REGIME.items():
+        step = a[16] / a[8] - 1
+        assert step < 0.20, "%s step %+.0f%%" % (regime, 100 * step)
+    assert tab[16] / tab[8] - 1 > 0.35, "the table's own step is the outlier"
+
+    # and the explanation: the corpus fit that reproduces 0.157 needs a beta the
+    # hardware does not have
+    c = ALPHA_CORPUS_JOINT_FIT["C"]
+    assert c["alpha"] == pytest.approx(tab[16], abs=0.002)
+    assert c["beta_inf"] > PHYSICAL_CEILING_GBPS
+    assert ALPHA_CORPUS_JOINT_FIT["D"]["beta_inf"] > PHYSICAL_CEILING_GBPS
+    # while the direct measurement in the additive rule's own regime stays inside it
+    from sim.hostregime import compare_styles
+    assert compare_styles()["percall"]["additive (shipped)"]["beta_inf"] < PHYSICAL_CEILING_GBPS
+
+    # nothing has been swapped in: alpha and beta are degenerate and a recalibration
+    # would have to redo the gates deliberately
+    assert tab[16] == 0.157
+
+
 def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
     """A structural improvement that was tested and only partly adopted.
 

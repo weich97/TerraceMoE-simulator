@@ -471,6 +471,38 @@ redden (C) are the pair this repository already refuses to choose between. What 
 that this is no longer one reading against another: it is two against a table entry, and the
 next recalibration should start there.
 
+### Why α(16) never agreed with anything
+
+This page has carried α(16) = 0.157 against an independent scan's 0.134 and recorded it
+as one reading against another with no way to choose. It is now four benchmarks against
+one table entry, and the entry has an explanation.
+
+α is not one quantity. Measured in both host regimes on the same collective
+([sim/hostregime.py](../sim/hostregime.py)), it is 0.114 ms at world 8 and 0.120 at
+world 16 with the host running ahead, and 0.229 and 0.261 with the host observing each
+call — a factor of two. The shipped table is a **deep-queue table**, which its own
+provenance note says and which its world-8 entry confirms to three digits (0.111 against
+0.114). The model then applies it under the additive rule, which belongs to the *other*
+regime.
+
+The world-16 entry matches neither: 0.120 < **0.157** < 0.261. A joint fit of the
+additive rule to corpus C explains where it came from — it returns α = 0.157 exactly,
+paired with β∞ = **131.8 GB/s**, above the 122.4 per-card aggregate egress this page
+endorses as physics. Corpus D needs 152.7. Directly measuring the same machine in the
+regime the additive rule belongs to gives (0.261, 105.8), inside the envelope.
+
+**So 0.157 is not an independent measurement of α; it is the α that compensates for a β
+the machine cannot deliver.** That is the same fact the model-form experiment found from
+the other side: the size-sweep corpora do not obey the additive rule, and forcing it on
+them shows up as an impossible bandwidth with an α bent to match. Every direct
+measurement puts the step from world 8 to world 16 between 4% and 14%; the table says
+41%.
+
+Nothing moves. α and β are degenerate — the reason `sim/fit.py` insists on pinning α —
+so the pair cannot be swapped in piecemeal, and a recalibration would have to redo the
+gates under a regime and a rule chosen deliberately. What changes is that a puzzle has
+become a diagnosis.
+
 ### Pricing a collective from its tiers: tested, and only partly adopted
 
 The model gives each named level one bandwidth, calibrated per configuration. That is a

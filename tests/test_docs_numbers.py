@@ -229,7 +229,7 @@ claim("docs/05-simulator.md",
       lambda: _host_regime_table(), 0.06)
 
 claim("docs/05-simulator.md",
-      "0.114 ms at world 8 and {n} at world 16",
+      "burst data, 0.114 ms at world 8 and {n} at world 16, lands near",
       lambda: [_regime_alpha()[16]], 0.001)
 
 # -- docs/03: the measured rack boundary ------------------------------------
@@ -264,6 +264,15 @@ claim("docs/05-simulator.md",
       "it predicts {n} GB/s for a world-128 all-to-all spanning both racks; the "
       "measurement is {n}.",
       lambda: _oos(), 0.05)
+
+claim("docs/05-simulator.md",
+      "it is {n} ms at world 8 and {n} at world 16 with the host running ahead, and "
+      "{n} and {n} with the host observing each call",
+      lambda: _alpha_regimes(), 0.0005)
+
+claim("docs/05-simulator.md",
+      "it returns α = {n} exactly, paired with β∞ = **{n} GB/s**",
+      lambda: _corpusC_fit(), 0.05)
 
 # -- docs/07: the overlap family table and its cross-references -------------
 
@@ -409,6 +418,17 @@ def _regime_alpha():
     from sim.hostregime import compare_styles
     return {w: round(v, 3)
             for w, v in compare_styles()["burst"]["quadrature"]["alpha"].items()}
+
+
+def _alpha_regimes():
+    from sim.calibrate import ALPHA_BY_REGIME as A
+    return [A["deep queue"][8], A["deep queue"][16],
+            A["host exposed"][8], A["host exposed"][16]]
+
+
+def _corpusC_fit():
+    from sim.calibrate import ALPHA_CORPUS_JOINT_FIT as F
+    return [F["C"]["alpha"], F["C"]["beta_inf"]]
 
 
 def _tier_table():
