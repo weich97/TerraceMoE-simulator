@@ -48,9 +48,15 @@ NUM = r"([-+]?\d+(?:\.\d+)?)"
 
 
 def _read(rel):
-    """Document text with whitespace collapsed and the unicode minus normalised."""
+    """Document text with whitespace collapsed and the unicode minus normalised.
+
+    Blockquote markers are stripped first: `>` at the start of a line is markdown
+    formatting, not content, and the correction notes this file exists to guard are
+    written as blockquotes.
+    """
     with io.open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
         text = fh.read()
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
     return re.sub(r"\s+", " ", text.replace("−", "-"))
 
 
@@ -283,6 +289,11 @@ claim("README.md",
       "**Two-hop wins in every configuration, by {n}x to {n}x**",
       lambda: _verdict_span(), 0.006)
 
+claim("docs/05-simulator.md",
+      "comes out **three times lower**: {n} ms at 24576 pairs against the {n} the "
+      "calibration records, which is {n} µs/row and a breakeven of {n} rather than 3.98.",
+      lambda: _chain_second_reading(), 0.006)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -467,6 +478,14 @@ def _oos():
 def _contention():
     from sim.hierarchy import CONTENTION
     return CONTENTION
+
+
+def _chain_second_reading():
+    from sim.chain_remeasured import US_PER_ROW, WIDTH_SWEEP, breakevens
+    from sim.machine import CHAIN_H_SWEEP_MS
+    return [dict(WIDTH_SWEEP)[2048], CHAIN_H_SWEEP_MS[2048],
+            US_PER_ROW["live chain today, one card"],
+            breakevens()["live chain today, one card"]]
 
 
 def _verdict_rows():

@@ -96,6 +96,18 @@ which two-hop starts to win, q=3, T=4096):
 | Hypothetical fused target (0.012) | **1.49** |
 | Zero implementation overhead (upper bound) | 1.10 |
 
+> **A second reading of that first row (2026-09-08).** The chain constant has been
+> re-measured at this page's own shape and convention — op level, one card, output pairs
+> as the denominator — and comes out **three times lower**: 0.7235 ms at 24576 pairs
+> against the 2.51 the calibration records, which is 0.0315 µs/row and a breakeven of
+> 2.13 rather than 3.98. Timing the *live* arrival sequence beside the reference puts it
+> only 5 to 16% above, so this is not a cheaper implementation being measured. Two
+> August readings agree with each other, two September readings agree with each other,
+> and they are a factor of three apart, which is a step rather than the documented 20%
+> drift. **Nothing is adopted**, because adopting the newer pair would be choosing by
+> date, and because the shape moved as well as the level. The evidence, the consequence
+> and what would settle it are in [sim/chain_remeasured.py](../sim/chain_remeasured.py).
+
 One-sentence takeaway: in this sensitivity study, the implementation tier moves the
 breakeven from 3.98 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
 lands on either side is unresolved until its effective ratio and call costs are measured.
@@ -695,6 +707,7 @@ python -m sim.phase              # phase spans; refuses step time until calibrat
 python -m sim.hostregime         # which rule each timing style wants, and why it matters
 python -m sim.hierarchy          # the measured supernode boundaries, and contention on them
 python -m sim.twohop_measured    # one hop against two, measured across a boundary
+python -m sim.chain_remeasured   # the chain constant, re-measured three times lower
 python -m sim.tiers              # pricing a collective from its tiers: where it breaks
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)

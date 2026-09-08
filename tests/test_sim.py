@@ -823,6 +823,56 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
+def test_the_chain_constant_has_a_second_reading_three_times_lower():
+    """The constant everything hinges on, re-measured, and deliberately not adopted.
+
+    calibrate.py calls CHAIN_US_PER_ROW "the constant everything hinges on -- it alone
+    moves the breakeven ratio from 1.10 to 3.98". Two August readings agree with it. Two
+    readings taken on 2026-09-08 at the same shape and the same convention are a factor
+    of three below it, and the obvious objection -- that the reference chain is cheaper
+    than the live one -- is refuted by timing the live sequence beside it.
+
+    This pins the disagreement, not a resolution. If someone later adopts the newer
+    reading the test will say so loudly, which is the point: a threefold move in this
+    constant moves the threshold the whole repository is about.
+    """
+    from sim.calibrate import CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_REMEASURED
+    from sim.chain_remeasured import (LIVE_VS_REFERENCE, ROW_SWEEP, US_PER_ROW,
+                                      WIDTH_SWEEP, breakevens, live_overhead,
+                                      ratio_to_calibration, us_per_row_here)
+
+    assert len(ROW_SWEEP) == 10 and len(WIDTH_SWEEP) == 4
+    assert len(LIVE_VS_REFERENCE) == 6
+
+    # the two August readings agree with each other
+    assert abs(CHAIN_US_PER_ROW_REMEASURED - CHAIN_US_PER_ROW) / CHAIN_US_PER_ROW < 0.2
+
+    # today's is three times below, at every hidden width, and the ratio grows with H
+    ratios = ratio_to_calibration()
+    assert all(3.0 < r < 4.0 for r in ratios.values()), ratios
+    assert ratios[8192] > ratios[1024], "the gather term moved more than the index term"
+
+    # and it is not the reference being a cheaper implementation
+    lo, hi = live_overhead()
+    assert 1.0 < lo and hi < 1.25, (
+        "the live sequence is within a quarter of the reference (%.2f-%.2f); if it "
+        "ever is not, the gap above is about what was timed rather than the machine"
+        % (lo, hi))
+
+    # the consequence, which is why this is not a footnote
+    b = breakevens()
+    assert b["shipped calibration"] == pytest.approx(3.98, abs=0.02)
+    assert 2.0 < b["live chain today, one card"] < 2.2
+    assert 2.4 < b["real chain under load, 8 cards"] < 2.6
+
+    # nothing has been adopted
+    assert CHAIN_US_PER_ROW == pytest.approx(0.0875, abs=0.0005), (
+        "the shipped chain constant moved. That is a legitimate thing to do, but it "
+        "changes the threshold this repository publishes from 3.98 to about 2.5, so it "
+        "has to be a decision with the gates re-run, not a quiet retune.")
+    assert us_per_row_here() < 0.5 * CHAIN_US_PER_ROW
+
+
 def test_two_hop_beats_one_hop_measured_across_the_boundary():
     """The first measured win in this project, and what it cost the model to be right.
 

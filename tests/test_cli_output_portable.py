@@ -45,6 +45,7 @@ CLI_MODULES = [
     "sim.hierarchy",
     "sim.tiers",
     "sim.twohop_measured",
+    "sim.chain_remeasured",
 ]
 
 # tools/breakeven.py branches on the ratio it is given, and each branch prints its own
