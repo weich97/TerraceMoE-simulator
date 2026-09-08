@@ -694,6 +694,7 @@ python -m sim.profile            # is a given machine worth it, and which condit
 python -m sim.phase              # phase spans; refuses step time until calibrated (docs/09)
 python -m sim.hostregime         # which rule each timing style wants, and why it matters
 python -m sim.hierarchy          # the measured supernode boundaries, and contention on them
+python -m sim.twohop_measured    # one hop against two, measured across a boundary
 python -m sim.tiers              # pricing a collective from its tiers: where it breaks
 python -m sim.validate           # Tier-2 gate (currently reports the failure, truthfully)
 python -m sim.sweep              # extrapolation (checks the gates at entry)

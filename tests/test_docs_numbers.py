@@ -273,6 +273,16 @@ claim("docs/05-simulator.md",
       "it returns α = {n} exactly, paired with β∞ = **{n} GB/s**",
       lambda: _corpusC_fit(), 0.05)
 
+claim("docs/03-applicability.md",
+      "| 2048 | 1 | 6 | {n} ms | {n} ms | **{n}** | | 2048 | 2 | 3 | {n} ms | {n} ms | "
+      "**{n}** | | 4096 | 1 | 6 | {n} ms | {n} ms | **{n}** | | 4096 | 2 | 3 | {n} ms | "
+      "{n} ms | **{n}** |",
+      lambda: _verdict_rows(), 0.006)
+
+claim("README.md",
+      "**Two-hop wins in every configuration, by {n}x to {n}x**",
+      lambda: _verdict_span(), 0.006)
+
 # -- docs/07: the overlap family table and its cross-references -------------
 
 for _fam in ("M0", "M1", "M2", "M3", "M4", "M5"):
@@ -457,6 +467,19 @@ def _oos():
 def _contention():
     from sim.hierarchy import CONTENTION
     return CONTENTION
+
+
+def _verdict_rows():
+    from sim.twohop_measured import MEASURED, g, two_hop_ms
+    out = []
+    for r in MEASURED:
+        out += [r[3], two_hop_ms(r), g(r)]
+    return out
+
+
+def _verdict_span():
+    from sim.twohop_measured import MEASURED, g
+    return [min(g(r) for r in MEASURED), max(g(r) for r in MEASURED)]
 
 
 def _boundaries():

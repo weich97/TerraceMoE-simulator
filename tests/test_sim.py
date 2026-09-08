@@ -823,6 +823,55 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
+def test_two_hop_beats_one_hop_measured_across_the_boundary():
+    """The first measured win in this project, and what it cost the model to be right.
+
+    Six of the seven end-to-end geometries lost, all inside one supernode where the
+    ratio is 1.03. Every claim that two-hop pays somewhere had been a model output. This
+    pins the measurement that stopped being one: one hop against two across a supernode
+    boundary, at four configurations, with the repository's own arrival chain running on
+    the device rather than a per-row estimate.
+
+    The model called all four correctly, and the term-by-term comparison is pinned too,
+    because its aggregate accuracy rests partly on two errors that cancel: Hop A
+    under-priced, the chain over-priced.
+    """
+    from sim.twohop_measured import (CHAIN_US_PER_ROW_MEASURED, MEASURED, MODEL_ERROR,
+                                     chain_share, every_configuration_wins, g,
+                                     two_hop_ms)
+    from sim.calibrate import CHAIN_US_PER_ROW
+
+    assert len(MEASURED) == 4
+    assert every_configuration_wins(), [round(g(r), 3) for r in MEASURED]
+    assert 1.4 < min(g(r) for r in MEASURED) < 1.5
+    assert 2.2 < max(g(r) for r in MEASURED) < 2.3
+
+    # the win grows with hidden width and with a tighter group cap, both of which the
+    # byte ledger predicts: more rows deduplicated, more payload per row
+    by = {(r[0], r[1]): g(r) for r in MEASURED}
+    assert by[(4096, 1)] > by[(2048, 1)], "wider hidden width must help two-hop"
+    assert by[(2048, 1)] > by[(2048, 2)], "a tighter cap deduplicates more"
+
+    # the components add up to what is reported
+    for r in MEASURED:
+        assert two_hop_ms(r) == pytest.approx(r[4] + r[5] + r[6] + r[7])
+        assert r[3] > two_hop_ms(r)
+        assert 0.10 < chain_share(r) < 0.30, (
+            "the arrival chain is a fifth to a quarter of two-hop here; if it stops "
+            "being that, the term this project keeps calling decisive has moved")
+
+    # the real chain is about half the cost the calibration carries, and that is
+    # recorded rather than adopted
+    assert CHAIN_US_PER_ROW_MEASURED < 0.6 * CHAIN_US_PER_ROW
+    assert CHAIN_US_PER_ROW == pytest.approx(0.0875, abs=0.0005), (
+        "the shipped constant has not been quietly retuned to the new reading")
+
+    # and the model's accuracy partly rests on cancelling errors: fixing the slow level
+    # helps, fixing the chain as well hurts
+    assert MODEL_ERROR["slow level as a pure tier"] < MODEL_ERROR["slow level fed a mixture"]
+    assert MODEL_ERROR["pure tier and measured chain"] > MODEL_ERROR["slow level as a pure tier"]
+
+
 def test_the_supernode_boundary_is_the_first_measured_ratio_above_the_flat_one():
     """The measured hierarchy ratio, and where it places.
 

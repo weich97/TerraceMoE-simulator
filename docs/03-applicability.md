@@ -86,4 +86,21 @@ Two things were measured that could have sunk this, and neither did.
 
 So the ratio clears the byte criterion at every quota — with a supernode as the fast domain, R = 128, so q=3 needs only 1.49 — and it clears the **effective** threshold for the arrival chain this repository already has, 3.98 at the reference hidden width, on both boundaries.
 
+### And then we measured the comparison itself
+
+Everything above is still a ratio placed against a threshold. The comparison this repository exists to make had never been measured anywhere it could win. It has been now — one hop against two, across the boundary, 128 ranks over two supernodes, with the repository's own arrival chain running on the device rather than a per-row estimate ([sim/twohop_measured.py](../sim/twohop_measured.py), instrument in [bench/twohop_verdict.py](../bench/twohop_verdict.py)):
+
+| H | M | q | one hop | two hop | **G** |
+|---:|---:|---:|---:|---:|---:|
+| 2048 | 1 | 6 | 7.381 ms | 4.181 ms | **1.77** |
+| 2048 | 2 | 3 | 7.324 ms | 5.122 ms | **1.43** |
+| 4096 | 1 | 6 | 13.637 ms | 6.105 ms | **2.23** |
+| 4096 | 2 | 3 | 13.627 ms | 8.235 ms | **1.65** |
+
+**Two-hop wins in every configuration measured, by 1.43× to 2.23×**, with the software that exists. It is the first measured win in this project, and it moves the two-hop case off the model and onto the machine. The win grows with hidden width and with a tighter group cap, which is what the byte ledger predicts: more rows deduplicated, more payload behind each one.
+
+The model called all four correctly and its median error on G is 14%, which is the useful part of the exercise rather than the impressive part — term by term it is right for partly compensating reasons. One hop is priced to 1–3%. Hop A is under-priced by 2.2 to 2.5×, because the slow level was given the bandwidth of a boundary-spanning all-to-all that sends only half its wire bytes across, then used for a hop that sends only across; the pure cross-boundary tier is 7.9 GB/s and using it takes the median error to 9%. The arrival chain is over-priced by about half, measuring 0.0424 µs per row against the shipped 0.0875. Both are recorded in the module; neither shipped constant has been retuned on one run.
+
+What this is not: a step-time claim, because Tier-2 fails and forbids one. This is the communication-call level, which is the tier Tier-1 unlocks. It is measured on the deeper of the two boundaries; on the shallower the model puts the first row at 1.33, still a win and still unmeasured. And it needs the routing constraint, whose quality cost is measured at M = 4 with eight groups only — the gap [docs/12](12-m-quality-experiment.md) exists to state.
+
 Three things this is not: an end-to-end verdict, because expert parallelism across two supernodes is 256 cards and α past world 128 is unsupported, and because the two-hop chain itself has not been measured across the boundary; a step-time claim, which Tier-2 forbids; and a reason to reread the negative result above, which was taken inside one supernode and stands exactly as measured.
