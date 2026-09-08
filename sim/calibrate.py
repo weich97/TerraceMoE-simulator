@@ -174,7 +174,7 @@ PER_PEER_MESSAGE_US = X_HALF_FLAT / (BETA_FLAT * 1e9) * 1e6
 # n_groups and hop B at world R, both in the low-bandwidth part of that curve, while
 # one-hop runs at the full world where delivery is best. Pricing all three at one beta
 # therefore flatters two-hop. profile.bandwidth_world_sensitivity prices it: the
-# effective breakeven moves from 3.98 to 4.52. **Not adopted**, and the reason is in
+# effective breakeven moves from 2.49 to 2.88. **Not adopted**, and the reason is in
 # that function's docstring.
 MARGINAL_BW_BY_WORLD = {8: 107.4, 16: 103.0, 128: 120.6}
 MARGINAL_BW_SECOND_MACHINE = {8: 99.6, 16: 96.5, 32: 106.9, 64: 107.1, 128: 113.3}
@@ -204,35 +204,70 @@ BETA_FAST = 122.4    # intra-node 8-card a2a: **physics-endorsed** --
 CROSS_NODE_RATIO = 0.974   # cross-node / intra-node (pairwise probes, 360 pairs, CV<0.4%) -- flat
 
 SPLITS_SYNC_MS = 0.044     # host-side retrieval of splits for variable-length a2a, per call (measured 0.042-0.046)
-CHAIN_US_PER_ROW = 2.15 * 1000.0 / 24576.0   # arrival chain, PyTorch op chain, per row
-                                             # (measured 2.15 ms/call @ 24576 rows)
-# This is the constant everything hinges on -- it alone moves the breakeven ratio
-# from 1.10 to 3.98 -- and until 2026-08-26 it rested on that single point. It was
-# then swept properly: nine row counts from 1024 to 65536, on each of two nodes,
-# thirty iterations each, op-level and single-card (bench/machine/dispatch_oplevel).
+CHAIN_US_PER_ROW = 1.042 * 1000.0 / 24576.0  # arrival chain, PyTorch op chain, per PAIR
+                                             # (measured 1.042 ms/call @ 24576 pairs,
+                                             #  in situ on 8 cards, 2026-09-08)
+# This is the constant everything hinges on -- it alone moves the breakeven ratio from
+# 1.10 to 2.49 -- and it over-charged the chain by 2.8x from the first commit until
+# 2026-09-08. It shipped as `2.15 * 1000 / 24576`, and both halves of that fraction
+# came from the same misreading.
 #
-# **The linear form holds where it is used.** Above 8192 rows the per-row cost is
-# 0.0865 to 0.1018 us, a 15% spread with no trend, and the two nodes agree to 2%.
-# The reference geometry sits at 24576 rows, inside that range.
+# **The denominator collision.** The instrument behind every chain measurement here
+# (bench/machine/dispatch_oplevel, not in this repository) is parameterised by *input
+# rows*, and expands each input row into `quota` (row, slot) pairs before the first
+# stage it times. All five stages scale with pairs. The sweeps were run at 24576 input
+# rows with quota 3, so they measure the chain over **73728 pairs**. The reference
+# geometry is a different point entirely: 4096 tokens per rank at k = 6 is 8192 input
+# rows and 24576 pairs. The numeral 24576 named the sweep's input rows and the
+# reference geometry's pairs, and the calibration read one as the other. core.py has
+# always charged the chain over `rows_hop_b()`, which is pairs -- so the model was
+# charging a 73728-pair measurement across 24576 pairs of work.
 #
-# **The level re-measures 13% higher**: 0.0987 us/row today against the 0.0875 here,
-# and 2.50 ms at the original 24576-row point against 2.15. Inside the documented
-# 20% drift, so the constant does not move -- but note which way it would move if it
-# did. Adopting 0.0987 raises the corrected breakeven from 3.98 to 4.34, against the method
-# this repository is proposing. Recorded because the new evidence is the stronger of
-# the two, eighteen measurements against one, and a future recalibration should
-# probably take it.
-CHAIN_US_PER_ROW_REMEASURED = 0.0987      # 2026-08-26, 9 row counts x 2 nodes
-# **And a boundary the linear form does not have.** Below about 8192 rows the chain
-# hits a fixed floor: 0.248 ms at 1024 rows where the linear form predicts 0.090.
+# **What the machine actually says at the reference geometry.** Six readings, two
+# dates, three instruments, all at 24576 pairs and H = 2048, one idle card:
+#     2026-08-23  0.7810, 0.7721   2026-08-24  0.7758     (the calibration's own
+#     2026-08-26  0.7446, 0.7295   2026-09-08  0.7150      instrument and two sweeps)
+# and 1.043 ms in situ with all eight cards of the node working, which is the level
+# that ships. Nothing on any date supports 2.15 ms here.
+#
+# **Two corollaries that are not the unit error.** First, the 2026-08-23 replacement of
+# `bincount` by a fixed-length `scatter_add` is a real 1.5x, visible in the instrument's
+# own output either side of that day (1.19 ms before, 0.78 ms after); the adopted level
+# is post-change, as the live code is. Second, load costs 1.4x on top of the idle
+# reading, which is why the in-situ number ships rather than the flattering one.
+#
+# The full evidence, and why no test in this repository could have caught this, is in
+# sim/chain_remeasured.py.
+CHAIN_US_PER_ROW_IDLE = 0.0303            # same geometry, one idle card, 2026-08-26
+CHAIN_US_PER_ROW_PRE_CORRECTION = 0.0875  # what shipped until 2026-09-08; 2.8x too high
+#
+# **The linear form holds where it is used.** Above 24576 pairs the per-pair cost is
+# 0.0284 to 0.0347 us, a 20% spread with no trend, and the two nodes agree to 2%. The
+# reference geometry sits at 24576 pairs -- at the bottom edge of that range, not
+# comfortably inside it as the pre-correction note claimed.
+#
+# The 2026-08-26 sweep was recorded here as re-measuring the level 13% higher, at
+# 0.0987 us/row against 0.0875. Both of those are per *input row*; on the pair
+# denominator the same sweep gives 0.0329, which agrees with the 2026-09-08 reading of
+# 0.0291 to within 12%. The two dates never disagreed.
+CHAIN_US_PER_ROW_REMEASURED = 0.0987      # 2026-08-26, 9 row counts x 2 nodes, PER INPUT ROW
+# **And a boundary the linear form does not have.** Below 24576 pairs the chain hits a
+# fixed floor. Against the idle level, which is the level the sweep was taken at, the
+# two-node means and what the linear form charges are:
+#      3072 pairs  0.248 ms measured  0.093 charged   under-priced 166%
+#      6144 pairs  0.281 ms measured  0.186 charged   under-priced  51%
+#     12288 pairs  0.426 ms measured  0.372 charged   under-priced  14%
+#     24576 pairs  0.737 ms measured  0.745 charged   closed
 # The model is therefore optimistic about the arrival chain on small geometries, and
 # optimistic about the chain means optimistic about two-hop, since only two-hop pays
-# it. At 3072 rows the gap is 23%, at 6144 rows 7%, and above 8192 it closes. Not
-# applied in core.py, for the same reason the skew model is not: it would model an
-# effect the Tier-1 targets do not contain. It is a stated limit on where the model
-# may be used, and tests/test_sim.py pins it.
-CHAIN_FLOOR_MS = 0.248                    # whole-chain wall clock at 1024 rows
-CHAIN_LINEAR_MIN_ROWS = 8192              # below this the linear form under-prices
+# it. (The pre-correction note put this at 23% and 7% at two intermediate points; those
+# two figures cannot be reproduced from the archived sweep under any denominator, so
+# they are replaced above by the measured points themselves.) Not applied in core.py,
+# for the same reason the skew model is not: it would model an effect the Tier-1
+# targets do not contain. It is a stated limit on where the model may be used, and
+# tests/test_sim.py pins it.
+CHAIN_FLOOR_MS = 0.248                    # whole-chain wall clock at 3072 pairs
+CHAIN_LINEAR_MIN_ROWS = 24576             # pairs; below this the linear form under-prices
 
 
 def saturating_beta(beta_inf: float, x_half: float,

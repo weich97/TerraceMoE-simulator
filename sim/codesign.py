@@ -414,11 +414,13 @@ def synthetic_dgx_h100(nodes: int = 16, chain: ArrivalChain = PYTORCH_CHAIN) -> 
     Everything else is borrowed from platform A under the discipline stated where each
     constant lives: the alpha curve and x_half from ``calibrate`` (borrow the shape,
     never trust the level), the launch cost from the world-8 deep-queue scan, and the
-    row-gather bandwidth as machine A's absolute 490 GB/s via ``from_gather_bw``,
+    row-gather bandwidth as machine A's absolute 1469 GB/s via ``from_gather_bw``,
     because machine A's HBM figure is not recorded here and so no efficiency transfers.
-    An H100's real gather is plausibly faster, which would cheapen the arrival chain
-    and raise every two-hop figure computed on this machine; the borrow is conservative
-    in that known direction.
+    On the H100's 3350 GB/s of HBM that absolute borrow implies 44% gather efficiency,
+    which is still low for a gather of multi-kilobyte contiguous rows, so the borrow
+    remains conservative in a known direction -- but three times less conservative than
+    it was before 2026-09-08, when this read 490 GB/s and 15%. The correction is in
+    ``machine.GATHER_GBPS_MEASURED``.
     """
     from .calibrate import ALPHA_PTS, X_HALF_FLAT
     from .machine import GATHER_GBPS_MEASURED, Accelerator

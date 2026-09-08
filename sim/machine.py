@@ -4,7 +4,7 @@
 ## Why this module exists
 
 ``calibrate.CHAIN_US_PER_ROW`` is, in that file's own words, "the constant everything
-hinges on": it alone moves the corrected breakeven hierarchy ratio from 1.10 to 3.98. It is also a
+hinges on": it alone moves the corrected breakeven hierarchy ratio from 1.10 to 2.49. It is also a
 single number measured on one machine at one hidden width, so it cannot transfer. Every
 prediction this repository makes for an unmeasured cluster has to borrow it, which is why
 those predictions are labeled extrapolation and why the reported threshold is stated only
@@ -20,28 +20,36 @@ line gives two terms that each depend on something a machine publishes:
 
 Three independent measurements agree on this split.
 
-1. The hidden-width sweep (thirty iterations on each of two nodes, 24576 rows) measures
+Every row count below is a **pair** count, because every stage of the chain runs after
+the input rows have been expanded into pairs. Getting that wrong is what put a factor
+of three into the constant; the correction is dated 2026-09-08 and lives in
+sim/chain_remeasured.py.
+
+1. The hidden-width sweep (thirty iterations on each of two nodes, 73728 pairs) measures
    2.37, 2.51, 2.85 and 3.79 ms at H of 1024, 2048, 4096 and 8192. Least squares gives an
    H-independent 2.109 ms and 0.2056 ms per 1024 of hidden width. The slope is
-   ``24576 * 1024 * 2`` bytes read and written again in 0.2056 ms, which is 490 GB/s
+   ``73728 * 1024 * 2`` bytes read and written again in 0.2056 ms, which is 1469 GB/s
    sustained: a gather running at memory bandwidth, not at anything to do with the fabric.
 
 2. The row sweep (nine row counts on each of two nodes) refutes the first reading we
    took of the H-independent term. Read as a fixed launch cost it would be 2.109 ms
    whatever the row count, and 16.3 of the measured 0.129 ms world-8 launches, which is
    a tidy integer and was briefly convincing. The same sweep measures the whole chain at
-   0.248 ms at 1024 rows, which a 2.109 ms floor cannot produce. The term is therefore
-   linear in rows, not fixed: 2.109 ms over 24576 rows is 85.8 ns of index work per row,
-   and 85.8 plus the 16.7 ns the gather costs at H=2048 is 102.5 ns per row against the
-   86.5 to 101.8 ns the row sweep measures directly. The launch floor is real but small,
-   and the row sweep sizes it: 0.248 ms is 1.9 of those same launches.
+   0.248 ms at 3072 pairs, which a 2.109 ms floor cannot produce. The term is therefore
+   linear in pairs, not fixed: 2.109 ms over 73728 pairs is 28.6 ns of index work per
+   pair, and 28.6 plus the 5.6 ns the gather costs at H=2048 is 34.2 ns per pair against
+   the 28.4 to 34.7 ns the row sweep measures directly. The launch floor is real but
+   small, and the row sweep sizes it: 0.248 ms is 1.9 of those same launches.
 
 3. The K1 kernel collapses all five stages into one kernel, so it pays the gather and
-   not the index work. That predicts 8.4 to 16.7 ns per row at H=2048, depending on
+   not the index work. That predicts 2.8 to 5.6 ns per pair at H=2048, depending on
    whether it materialises the payload or writes straight into the send buffer. The
    figure this repository has been quoting for a fused chain, 0.012 us/row, is 12 ns and
-   sits between them. It was entered as an estimate and is now bracketed by a
-   measurement it was not derived from.
+   sits **above** both -- so the design target is conservative by about two- to
+   fourfold, and the fused threshold this repository publishes is a ceiling on what a
+   fused chain would actually buy rather than an estimate of it. Before the denominator
+   was corrected the same arithmetic put the bracket at 8.4 to 16.7 ns and the target
+   neatly inside it, which read as confirmation and was arithmetic on the wrong count.
 
 ## What this buys
 
@@ -73,22 +81,54 @@ BYTES_BF16 = 2
 # ---------------------------------------------------------------------------
 
 CHAIN_H_SWEEP_MS = {1024: 2.37, 2048: 2.51, 4096: 2.85, 8192: 3.79}
-CHAIN_H_SWEEP_ROWS = 24576
+
+#: What the hidden-width sweep was actually measured over, and the distinction that
+#: cost this repository a factor of three.
+#:
+#: The instrument takes an **input-row** count, and expands each input row into
+#: ``quota`` (row, slot) pairs *before* any of the five stages it times. Every timed
+#: stage therefore scales with pairs, not with input rows. The sweep ran at 24576 input
+#: rows with quota 3, so each entry in CHAIN_H_SWEEP_MS above is the chain over 73728
+#: pairs. Recovering the instrument's archived output on 2026-09-08 confirms it exactly:
+#: the two-node means at that geometry are 2.368, 2.510, 2.850 and 3.787 ms.
+#:
+#: **The reference geometry is not that point.** It has 4096 tokens per rank with k = 6
+#: and M = 2, which is 8192 input rows and 24576 pairs. Until 2026-09-08 the sweep's
+#: 24576 input rows were read as the reference geometry's 24576 pairs -- the same
+#: numeral standing for two quantities three times apart. sim/chain_remeasured.py
+#: carries the evidence, the correction, and why no test in this repository could have
+#: caught it.
+CHAIN_H_SWEEP_INPUT_ROWS = 24576
+CHAIN_H_SWEEP_QUOTA = 3
+CHAIN_H_SWEEP_PAIRS = CHAIN_H_SWEEP_INPUT_ROWS * CHAIN_H_SWEEP_QUOTA   # 73728
+
+#: The reference geometry's pair count, which is what core.py charges the chain over
+#: (``MoEGeometry.rows_hop_b()`` = tokens per rank x k). Numerically equal to the
+#: sweep's *input* row count, which is exactly how the two came to be confused.
+CHAIN_REFERENCE_PAIRS = 24576
 
 CHAIN_FIXED_MS = 2.109        # least squares intercept over CHAIN_H_SWEEP_MS
 CHAIN_PER_1024H_MS = 0.2056   # least squares slope, ms per 1024 of hidden width
 
 #: Sustained bandwidth of the [pairs, H] gather, counting the payload read and written
 #: once each. Derived from CHAIN_PER_1024H_MS; not a vendor figure.
-GATHER_GBPS_MEASURED = (CHAIN_H_SWEEP_ROWS * 1024 * BYTES_BF16 * 2
+#:
+#: Corrected 2026-09-08 from 490 GB/s, which divided the slope by the sweep's input rows
+#: rather than by the pairs the gather actually moves. 490 GB/s would have been about
+#: 30% of this machine's HBM bandwidth, which sits oddly with the claim it appears in;
+#: the corrected figure is near enough to peak that "a gather running at memory
+#: bandwidth, not at anything to do with the fabric" is a description rather than a
+#: hope. The rows are 2 to 16 KB of contiguous payload each, which is why it streams.
+GATHER_GBPS_MEASURED = (CHAIN_H_SWEEP_PAIRS * 1024 * BYTES_BF16 * 2
                         / (CHAIN_PER_1024H_MS * 1e-3) / 1e9)
 
-#: Index, sort and histogram work in the unfused chain, per row, independent of hidden
-#: width. CHAIN_FIXED_MS over CHAIN_H_SWEEP_ROWS. This is the term the fused kernel
+#: Index, sort and histogram work in the unfused chain, per pair, independent of hidden
+#: width. CHAIN_FIXED_MS over CHAIN_H_SWEEP_PAIRS. This is the term the fused kernel
 #: removes and the only implementation-specific number in the chain model.
-INDEX_NS_PER_ROW = CHAIN_FIXED_MS * 1e6 / CHAIN_H_SWEEP_ROWS
+#: Corrected 2026-09-08 from 85.8 ns, same denominator error.
+INDEX_NS_PER_ROW = CHAIN_FIXED_MS * 1e6 / CHAIN_H_SWEEP_PAIRS
 
-#: Whole-chain wall clock at 1024 rows, where the linear form no longer holds because the
+#: Whole-chain wall clock at 3072 pairs, where the linear form no longer holds because the
 #: work is too small to fill the launches. calibrate.CHAIN_FLOOR_MS carries the same
 #: number; it is 1.9 of the measured world-8 launch cost.
 LAUNCH_FLOOR_OPS = 2
@@ -170,27 +210,34 @@ class ArrivalChain:
         return self.ms(rows, H, accel) * 1000.0 / rows
 
 
-#: The level the rest of this repository is calibrated to: 2.15 ms at
-#: CHAIN_H_SWEEP_ROWS rows and H = 2048, from a single measurement.
-#: calibrate.CHAIN_US_PER_ROW is this number divided by the row count.
-CHAIN_LEVEL_CALIBRATION_MS = 2.15
+#: The level the rest of this repository is calibrated to: the whole arrival chain at
+#: the reference geometry (CHAIN_REFERENCE_PAIRS pairs, H = 2048), measured in situ on
+#: eight cards under load. calibrate.CHAIN_US_PER_ROW is this number over that pair
+#: count.
+#:
+#: Corrected 2026-09-08 from 2.15 ms. That figure was the chain at 73728 pairs read as
+#: though it were the chain at 24576, and no reading of this machine on any date
+#: supports it at the reference geometry: six of them, on two dates, through three
+#: instruments, land between 0.715 and 0.781 ms on one idle card, and the in-situ
+#: measurement under load is 1.042. See sim/chain_remeasured.py.
+CHAIN_LEVEL_CALIBRATION_MS = 1.042
 
 
 def chain_us_per_row_at(H: int) -> float:
-    """The operator chain's per-row cost at hidden width ``H``, at the shipped level.
+    """The operator chain's per-pair cost at hidden width ``H``, at the shipped level.
 
-    Two measurements of the same quantity disagree by the run-to-run drift already
-    documented for it: the calibration carries 2.15 ms at 24576 rows from one
-    measurement, and this sweep's own H = 2048 point is 2.51 ms from eighteen. Only
-    the sweep resolves the *shape* in H, and only the calibration level is what every
-    other figure in this repository is stated at. So the shape comes from the sweep
-    and the level from the calibration, which makes ``chain_us_per_row_at(2048)``
-    exactly ``calibrate.CHAIN_US_PER_ROW`` and moves no figure quoted at the reference
-    width.
+    Two things are needed and they come from different measurements. Only the
+    hidden-width sweep resolves the *shape* in H, and it was taken at 73728 pairs on
+    one idle card. Only the two-hop verdict run measures the *level* the model has to
+    charge, which is what the chain costs in situ with all eight cards of a node
+    working: 1.042 ms at the reference geometry. So the shape comes from the sweep and
+    the level from the in-situ run, which makes ``chain_us_per_row_at(2048)`` exactly
+    ``calibrate.CHAIN_US_PER_ROW``.
 
-    Taking the sweep's level as well is a legitimate reading of the same data -- it
-    puts the reference threshold at 4.46 rather than 3.98 -- but it is a different
-    one, and it must be chosen rather than arrived at by mixing the two.
+    The two are commensurable now in a way they were not before 2026-09-08: both are
+    stated per pair. Taking the idle level instead is a legitimate reading -- it puts
+    the reference threshold at 2.09 rather than 2.49 -- but a real dispatch does not
+    run on an idle card, so the higher, less flattering level ships.
     """
     if H not in CHAIN_H_SWEEP_MS:
         raise ValueError(
@@ -199,7 +246,7 @@ def chain_us_per_row_at(H: int) -> float:
             % sorted(CHAIN_H_SWEEP_MS))
     rebased_ms = (CHAIN_H_SWEEP_MS[H] * CHAIN_LEVEL_CALIBRATION_MS
                   / CHAIN_H_SWEEP_MS[2048])
-    return rebased_ms * 1000.0 / CHAIN_H_SWEEP_ROWS
+    return rebased_ms * 1000.0 / CHAIN_REFERENCE_PAIRS
 
 
 PYTORCH_CHAIN = ArrivalChain("PyTorch operator chain", INDEX_NS_PER_ROW, 2.0)

@@ -34,7 +34,7 @@ be measured or what precondition fails:
 | Condition | Why it can sink an otherwise good machine |
 |---|---|
 | q = k/M ≥ 2 | at q=1 each token already sends one row per group, so there is nothing to deduplicate |
-| ratio ≥ **effective** breakeven | the byte account needs 1.31 at R=8, q=3; the corrected reference thresholds are 3.98 for the measured PyTorch chain and 1.49 for the hypothetical fused target |
+| ratio ≥ **effective** breakeven | the byte account needs 1.31 at R=8, q=3; the corrected reference thresholds are 2.49 for the measured PyTorch chain and 1.49 for the hypothetical fused target |
 | EP spans >1 fast domain | if every expert fits inside one NVLink/HCCS domain there is no slow hop to save, so keep EP in the domain instead. Rack-scale domains make this common |
 | messages bandwidth-bound | below the half-performance size, byte savings do not convert into time |
 | α(N_g)+α(R) < α(EP) | two hops pay two fixed costs, so on a machine where α barely grows with world size the swap loses before any byte moves. **A machine property, must be measured** |
@@ -156,7 +156,7 @@ answers to three gates rather than to a plot that looks right.
 
 The band above is 400 Monte Carlo draws over the calibration uncertainty, including
 the bootstrap interval of `x_half`. Two anchors read off it: at a hierarchy ratio of
-8 the least favourable measured-chain case is still 1.41, so that simulated direction
+8 the least favourable measured-chain case is still 1.76, so that simulated direction
 is robust to propagated calibration error. At ratio 1.03 the zero-overhead p95 is
 1.03 and crosses unity, so no robust sign claim is made for that corner.
 
@@ -182,10 +182,51 @@ Three results, all of them load-bearing elsewhere in this repository.
   issuing the next. The gap is a per-call cost that holds its share, 46 to 59%,
   across every payload from 64 KiB to 16 MB.
 
-Charging two-hop one extra host exposure moves the breakeven ratio from 3.98 to
-4.15. Removing the arrival chain instead moves it from 3.98 to 1.10. The ordering is
+Charging two-hop one extra host exposure moves the breakeven ratio from 2.49 to
+2.67. Removing the arrival chain instead moves it from 2.49 to 1.10. The ordering is
 the point: fuse the chain first, and the launch path is the next thing worth paying
-for, not the first.
+for, not the first — though correcting the chain constant on 2026-09-08 narrowed the
+gap between the two from 2.9 to 1.4.
+
+### The constant everything hinges on was over-charged by 2.8x
+
+`calibrate.CHAIN_US_PER_ROW` prices the arrival chain, and this repository's own
+comment calls it "the constant everything hinges on -- it alone moves the breakeven
+ratio". It shipped as `2.15 ms / 24576` from the first commit until 2026-09-08, and
+both halves of that fraction came from one misreading.
+
+The instrument that measured it takes an **input-row** count and expands each input row
+into `quota` (row, slot) pairs before the first stage it times. Its sweeps ran at 24576
+input rows with quota 3, so they measure the chain over **73728 pairs**. The reference
+geometry is a different point: 4096 tokens per rank at k = 6 is 8192 input rows and
+**24576 pairs**, and `core.py` has always charged the chain over pairs. One numeral
+named both quantities, three times apart.
+
+Recovering the instrument's archived output settled it three ways: the shipped
+hidden-width sweep is reproduced exactly as the archived two-node mean at 73728 pairs;
+six readings at the reference geometry, on two dates through three instruments, agree
+to 9% at 0.72-0.78 ms on an idle card; and the model was charging 2.15 ms there. The
+shipped constant is now **0.0424 us per pair** -- the chain measured in situ with all
+eight cards of a node working, the dearer of the corrected readings.
+
+| | before | after |
+|---|---:|---:|
+| chain cost per pair | 0.0875 us | **0.0424 us** |
+| index work per pair | 85.8 ns | 28.6 ns |
+| row-gather bandwidth | 490 GB/s | 1469 GB/s |
+| **effective breakeven ratio** | **3.98** | **2.49** |
+
+Two things make this more than a number change. The correction moves *toward* the
+method -- a machine needs a shallower hierarchy than published before two-hop pays --
+so it is the flattering direction and is stated with the evidence rather than asserted.
+And no test here could have caught it: the chain enters `validate.predict_g` in the
+dispatch arm and is removed again by the back-solved combine constant, which is rescaled
+by the same row count, so the **Tier-2 gate returns an identical MAE whether the chain
+costs 0.0875, 0.0424 or nothing at all**. The repository's only end-to-end validation is
+structurally blind to the constant its headline threshold is most sensitive to.
+`sim/chain_remeasured.py` carries the evidence and demonstrates the cancellation; the
+correction also reordered the docs/07 overlap families, where the naive no-overlap
+baseline is now the most accurate of the six.
 
 ### Where the wins and losses come from
 
@@ -193,7 +234,7 @@ for, not the first.
 
 Green is where two-hop wins. The two panels differ only in the arrival chain, and
 the measured-chain and hypothetical-fused targets move the corrected breakeven from
-3.98 to 1.49. At ratio 3.2 this is a sensitivity comparison, not a prediction for a
+2.49 to 1.49. At ratio 3.2 this is a sensitivity comparison, not a prediction for a
 named machine.
 
 ### End-to-end measurements on platform A
@@ -244,13 +285,13 @@ constant, which is why this repository makes no claim about clusters past 128 ra
 | Path | Contents | Status |
 |---|---|---|
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
-| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 417 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
+| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 429 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
 | `sim/` | Cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the target checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b gates passed** (4.1% median on C1; 1.9%/9.3%/8.0% on C2-C4, with C3 a same-corpus B fit and C4 the post-freeze A holdout); a world-8 drift probe fails and is not retuned. Tier-2 fails, so step-level extrapolation is banned. |
 | `sim/machine.py`, `sim/codesign.py`, `sim/envelope.py`, `sim/archsearch.py`, `sim/record.py` | Co-design layer: the same cost terms turned around — which architectures a machine runs well. Machine/implementation descriptors, per-architecture step breakdown, the model-size band a cluster is good at, a capacity-constrained architecture search, and the one controlled comparison the published record permits (`python -m sim.codesign` / `sim.envelope` / `sim.archsearch` / `sim.record`) | Chain model reproduces its calibration sweeps (2.9% worst case, tests pin it); **residency is unmeasured** and every verdict it touches says so ([docs/11](docs/11-residency-measurement.md)); the group-cap table is synthetic sensitivity ([docs/12](docs/12-m-quality-experiment.md)); both record checks hold, and the record cannot locate the lower edge ([docs/13](docs/13-published-mfu-record.md)) |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
 | `bench/a2a_form_probe.py`, `bench/xsupernode_*.py`, `sim/hostregime.py`, `sim/hierarchy.py`, `sim/tiers.py` | The instrument and the measurement that settled whether a collective's fixed cost adds to its transfer or overlaps it. Both timing styles, same machine, same worlds, same sizes: the answer depends on whether the host observes each call, which is why two of this repository's own corpora had disagreed (`python -m sim.hostregime`) | **Measured**, 46 points at worlds 8 and 16; the shipped additive rule is the one an MoE dispatch is in |
-| `tests/` | 417 tests, pure CPU (no NPU needed); `test_docs_numbers.py` recomputes every derived number these docs state, and `test_cli_output_portable.py` runs each documented command against a console that cannot encode anything but ASCII | All green |
+| `tests/` | 429 tests, pure CPU (no NPU needed); `test_docs_numbers.py` recomputes every derived number these docs state, and `test_cli_output_portable.py` runs each documented command against a console that cannot encode anything but ASCII | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |
 | `docs/` | Design docs ×5, the routing constraint explained (docs/10), full ablation results (docs/06), the Tier-2 campaign (docs/07), the one-sided verdict (docs/08), the phase model with the measurement that would calibrate it (docs/09), the residency-measurement protocol (docs/11), the preregistered group-cap experiment (docs/12), and the published-MFU literature sweep with its verdict (docs/13); figures-first | — |
 | `tools/gen_figures.py` | Result-figure generation (numbers embedded; figures reproducible) | — |
@@ -297,8 +338,18 @@ things v1 states are superseded here, and each carries a dated note where it was
 - **The arrival-chain decomposition.** v1 gives 2.17 ms of index work plus 0.203 ms per
   1024 of hidden width, with the gather at 14% of the chain. Least squares over the
   shipped sweep gives 2.11, 0.206 and 16%.
-- **Two digits of the hidden-width threshold series**, 5.96 and 2.90 against 5.95 and
-  2.89 as `sim.uncertainty.breakeven_vs_hidden_width` computes them.
+- **The whole hidden-width threshold series.** v1 gives 5.96 and 2.90 at H of 1024 and
+  4096; `sim.uncertainty.breakeven_vs_hidden_width` now computes 3.37 and 2.02. Two
+  corrections separate them: the small one that moved 5.96 to 5.95, and the arrival-chain
+  denominator error below, which moved everything by a further third.
+- **The arrival-chain constant itself, and every threshold computed from it.** The paper
+  states the reference threshold as 3.98 for the measured PyTorch chain. That constant
+  divided a 73728-pair measurement by 24576, because the instrument behind it is
+  parameterised by input rows and the reference geometry's *pair* count is numerically
+  equal to the sweep's *input row* count. The corrected threshold is **2.49**
+  ([sim/chain_remeasured.py](sim/chain_remeasured.py)). This is the largest single
+  divergence between the paper and the repository, and it moves in the method's favour:
+  a machine needs a shallower hierarchy than the paper claims before two-hop pays.
 
 Three results here postdate v1 entirely and are not in the paper at all: the host-regime
 experiment that settled whether a collective's fixed cost adds to its transfer or

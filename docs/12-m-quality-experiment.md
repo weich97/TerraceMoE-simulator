@@ -17,16 +17,25 @@ rank:
 
 | M | q = k/M | G, PyTorch chain | G, fused kernel |
 |---|---|---|---|
-| 4 | 2 | 0.948 | 1.490 |
-| 2 | 4 | 1.204 | 2.234 |
-| 1 | 8 | 1.391 | 2.979 |
+| 4 | 2 | 1.362 | 1.649 |
+| 2 | 4 | 1.960 | 2.614 |
+| 1 | 8 | 2.510 | 3.694 |
 
 Reproduce with `python -m sim.codesign`; a test pins every cell. These are
-dispatch-call ratios, not step times: the step-level gate fails. On the PyTorch
-operator chain, `M = 4` is a loss even at ratio 9 and tightening to `M = 1` turns it
-into a 1.39 win; with the fused chain every cap wins and tightening is worth 1.49 to
-2.98. The chain, as everywhere else in this repository, moves the verdict more than
-the cap does.
+dispatch-call ratios, not step times: the step-level gate fails. Every cap wins on
+both chains, and tightening `M` is worth 1.36 to 2.51 on the PyTorch operator chain
+and 1.65 to 3.69 fused. The chain still moves the verdict more than the cap does, but
+by less than it appeared to: correcting its cost narrowed the gap between the two
+columns from 1.6-2.1x to 1.2-1.5x.
+
+> **Correction (2026-09-08).** The table read 0.948 / 1.204 / 1.391 and 1.490 / 2.234 /
+> 2.979 until the arrival-chain constant was found to be over-charged by 2.8x and the
+> row-gather bandwidth under-stated by 3x, both from the same denominator error
+> ([sim/chain_remeasured.py](../sim/chain_remeasured.py)). The PyTorch-chain column
+> rises 44 to 80 percent and the fused column 11 to 24 percent. The direction is again
+> unchanged, but `M = 4` is now a **win** at 1.36 rather than the loss the 2026-09-01
+> correction had just introduced -- so the sentence "M = 4 is a loss even at ratio 9"
+> stood for exactly one week and was never right.
 
 > **Correction (2026-09-01).** An earlier version of this table read 1.268 / 1.565 /
 > 1.845 and 1.835 / 2.529 / 3.353, with `x_half` stated as 46 KiB. Those numbers were

@@ -74,13 +74,17 @@ class ClusterSpec:
     knobs (all with measured provenance; can be toggled per scenario):
       splits_sync_ms    host-side retrieval of splits for variable-length a2a, per call
                         (internal measurement records)
-      chain_us_per_row  local tensor ops of the two-hop arrival chain, **per row**.
+      chain_us_per_row  local tensor ops of the two-hop arrival chain, **per (row,
+                        slot) pair** -- which is what rows_hop_b() counts, and the
+                        denominator every chain measurement here is now stated in.
                         The first version treated it as a constant -- the validation gate
                         failed on the spot (load-axis MAE 0.084): the measured penalty
                         grows faster than bytes as T grows, and the arrival chain is
-                        tensor ops, linear in row count.
-                        Measured at 24576 rows (internal measurement records, k=6)
-                        => 0.0875 us/row. Fused-kernel scenario ~0.012; perfect scenario 0.
+                        tensor ops, linear in pair count.
+                        Measured at 24576 pairs, in situ on 8 cards (2026-09-08)
+                        => 0.0424 us/pair. Fused-kernel scenario ~0.012; perfect 0.
+                        Was 0.0875 until 2026-09-08, from a measurement taken over
+                        73728 pairs and divided by 24576; see sim/chain_remeasured.py.
     """
     name: str
     R: int
@@ -88,7 +92,7 @@ class ClusterSpec:
     slow: Level
     flat: Level
     splits_sync_ms: float = 0.044
-    chain_us_per_row: float = 2.15 * 1000.0 / 24576.0   # = 0.0875 us/row, internal measurement records/flag
+    chain_us_per_row: float = 1.042 * 1000.0 / 24576.0  # = 0.0424 us/pair, in situ 2026-09-08
     #: How a call's fixed cost combines with its transfer: t = (alpha^p + T^p)^(1/p).
     #: 1.0 adds them, which is what every shipped constant was fitted under and what
     #: the saturating beta table already expresses. 2.0 combines them in quadrature,

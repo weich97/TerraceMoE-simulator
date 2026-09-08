@@ -136,19 +136,27 @@ def test_overlap_family_structure_pins():
     - M4 (hide ∝ compute) gets every direction right (5/5) but misses the MAE gate by about 2x;
     - M2 (hide per call) is closest in magnitude yet flips sign on the scale axis (signs <5).
     If these two numbers change = the calibration or the model moved; the docs/07 table
-    must be re-issued in step.
+    must be re-issued in step. It did, on 2026-09-08: correcting the arrival-chain
+    constant reordered the whole family. **The naive baseline M0 is now the most
+    accurate family of the six**, so every overlap correction is worse than doing
+    nothing, and the ones that used to look best were fitting a chain that was
+    over-charged 2.8x. The gate still fails, so the negative result is unchanged --
+    it is now a cleaner one.
     """
     from sim.overlap import evaluate
     from sim.calibrate import flat_supernode
     res = evaluate(flat_supernode(), verbose=False)
-    assert res["M4"]["signs_ok"] == 5 and 0.035 <= res["M4"]["mae"] <= 0.07
-    assert res["M2"]["signs_ok"] < 5 and res["M2"]["mae"] <= 0.08
-    assert res["M0"]["mae"] >= 0.10   # failure magnitude of the naive baseline (~0.140)
+    assert res["M4"]["signs_ok"] == 5
+    assert res["M2"]["signs_ok"] < 5
+    assert res["M0"]["mae"] == min(res[f]["mae"] for f in res), (
+        "the naive baseline is no longer the most accurate family; docs/07 §1 says it "
+        "is, and that is the whole shape of the corrected negative result")
+    assert res["M0"]["mae"] > 0.025, "M0 would now pass the Tier-2 gate; re-run it"
     # MAE snapshot pin for the docs/07 §1 table (±0.005): any move in the calibration
     # constants turns this red, a reminder to re-issue the docs/07 table in step
     # (review found a loose pin failed to catch a 20% drift in the arrival-chain constant)
-    for fam, doc in (("M0", 0.140), ("M1", 0.150), ("M2", 0.060),
-                     ("M3", 0.133), ("M4", 0.045), ("M5", 0.088)):
+    for fam, doc in (("M0", 0.048), ("M1", 0.153), ("M2", 0.080),
+                     ("M3", 0.133), ("M4", 0.080), ("M5", 0.108)):
         assert abs(res[fam]["mae"] - doc) <= 0.005,             "%s MAE=%.4f deviates from the docs/07 snapshot %.3f" % (fam, res[fam]["mae"], doc)
 
 
@@ -189,7 +197,7 @@ def test_breakeven_ordering_and_snapshot():
     from sim.sweep import CHAIN_SCENARIOS
     bes = [breakeven_ratio(chain) for _, chain in CHAIN_SCENARIOS]
     assert bes[0] > bes[1] > bes[2] >= 1.0
-    for got, doc in zip(bes, (3.98, 1.49, 1.10)):
+    for got, doc in zip(bes, (2.49, 1.49, 1.10)):
         assert abs(got - doc) <= 0.02, "breakeven %.2f deviates from the corrected snapshot %.2f" % (got, doc)
 
 
@@ -815,62 +823,88 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     for _name, shipped, per_world in rows:
         assert per_world > shipped, (
             "the measured world-dependence must make two-hop look worse, not better")
-    for (_n, shipped, per_world), doc in zip(rows, ((3.98, 4.52), (1.49, 1.78),
+    for (_n, shipped, per_world), doc in zip(rows, ((2.49, 2.88), (1.49, 1.78),
                                                    (1.10, 1.34))):
         assert shipped == pytest.approx(doc[0], abs=0.01)
         assert per_world == pytest.approx(doc[1], abs=0.01)
     # and it displaces the threshold further than the measured launch cost does
-    assert rows[0][2] - rows[0][1] > 4.15 - 3.98
+    assert rows[0][2] - rows[0][1] > 2.666 - 2.4919   # the launch-cost displacement
 
 
-def test_the_chain_constant_has_a_second_reading_three_times_lower():
-    """The constant everything hinges on, re-measured, and deliberately not adopted.
+def test_the_chain_constant_was_over_charged_by_a_denominator():
+    """The constant everything hinges on, and the unit collision that inflated it 2.8x.
 
     calibrate.py calls CHAIN_US_PER_ROW "the constant everything hinges on -- it alone
-    moves the breakeven ratio from 1.10 to 3.98". Two August readings agree with it. Two
-    readings taken on 2026-09-08 at the same shape and the same convention are a factor
-    of three below it, and the obvious objection -- that the reference chain is cheaper
-    than the live one -- is refuted by timing the live sequence beside it.
+    moves the breakeven ratio from 1.10 to 2.49". It shipped at 0.0875 us until
+    2026-09-08, from a measurement taken over 73728 pairs and divided by 24576 because
+    the instrument behind it is parameterised by *input rows* and the reference geometry
+    happens to have 24576 *pairs*. One numeral, two quantities, three times apart.
 
-    This pins the disagreement, not a resolution. If someone later adopts the newer
-    reading the test will say so loudly, which is the point: a threefold move in this
-    constant moves the threshold the whole repository is about.
+    This pins the resolution, not the disagreement it replaced: that the archived sweep
+    is at the pair count claimed, that every reading at the reference geometry agrees
+    across two dates and three instruments, and that the Tier-2 gate cannot see any of
+    it -- which is how the error survived.
     """
-    from sim.calibrate import CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_REMEASURED
-    from sim.chain_remeasured import (LIVE_VS_REFERENCE, ROW_SWEEP, US_PER_ROW,
-                                      WIDTH_SWEEP, breakevens, live_overhead,
-                                      ratio_to_calibration, us_per_row_here)
+    from sim.calibrate import CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_IDLE
+    from sim.chain_remeasured import (AUGUST_ROW_SWEEP, CALIBRATION_INSTRUMENT,
+                                      LIVE_VS_REFERENCE, REFERENCE_PAIRS,
+                                      REFERENCE_READINGS, ROW_SWEEP, SWEEP_PAIRS,
+                                      US_PER_ROW, WIDTH_SWEEP, breakevens,
+                                      chain_cancels_in_validation, histogram_speedup,
+                                      live_overhead, overcharge,
+                                      published_sweep_is_at_pairs, ratio_to_calibration,
+                                      reference_spread, us_per_row_here)
 
     assert len(ROW_SWEEP) == 10 and len(WIDTH_SWEEP) == 4
     assert len(LIVE_VS_REFERENCE) == 6
+    assert len(AUGUST_ROW_SWEEP) == 9 and len(CALIBRATION_INSTRUMENT) == 5
 
-    # the two August readings agree with each other
-    assert abs(CHAIN_US_PER_ROW_REMEASURED - CHAIN_US_PER_ROW) / CHAIN_US_PER_ROW < 0.2
+    # 1. the denominator, proved from the archive rather than asserted: the shipped
+    #    hidden-width sweep IS the two-node mean at SWEEP_PAIRS, and nothing else.
+    assert SWEEP_PAIRS == 73728
+    assert published_sweep_is_at_pairs(), (
+        "machine.CHAIN_H_SWEEP_MS no longer matches the archived two-node means at "
+        "%d pairs, which is the only evidence for which denominator it is in" % SWEEP_PAIRS)
 
-    # today's is three times below, at every hidden width, and the ratio grows with H
+    # 2. every reading at the reference geometry agrees, two dates, three instruments
+    lo, hi = reference_spread()
+    assert (hi - lo) / lo < 0.12, (
+        "the six reference-geometry readings span %.0f%%; they agreed to 9%% when the "
+        "denominator was corrected, and that agreement is the finding" % (100 * (hi - lo) / lo))
+    assert all(0.70 < ms < 0.79 for _lab, ms in REFERENCE_READINGS)
+    assert overcharge() == pytest.approx(2.84, abs=0.02)
+
+    # 3. once on one denominator the two dates differ by drift, not by a factor of three
     ratios = ratio_to_calibration()
-    assert all(3.0 < r < 4.0 for r in ratios.values()), ratios
-    assert ratios[8192] > ratios[1024], "the gather term moved more than the index term"
+    assert all(1.0 < r < 1.4 for r in ratios.values()), ratios
 
-    # and it is not the reference being a cheaper implementation
+    # 4. and it is not the reference being a cheaper implementation than the live chain
     lo, hi = live_overhead()
-    assert 1.0 < lo and hi < 1.25, (
-        "the live sequence is within a quarter of the reference (%.2f-%.2f); if it "
-        "ever is not, the gap above is about what was timed rather than the machine"
-        % (lo, hi))
+    assert 1.0 < lo and hi < 1.25
 
-    # the consequence, which is why this is not a footnote
+    # 5. two real effects that are not the unit error
+    assert histogram_speedup() == pytest.approx(2.43, abs=0.02)
+    assert CHAIN_US_PER_ROW / CHAIN_US_PER_ROW_IDLE == pytest.approx(1.40, abs=0.02), (
+        "load costs 1.4x over the idle reading, and the loaded level is what ships")
+
+    # 6. the consequence
     b = breakevens()
-    assert b["shipped calibration"] == pytest.approx(3.98, abs=0.02)
-    assert 2.0 < b["live chain today, one card"] < 2.2
-    assert 2.4 < b["real chain under load, 8 cards"] < 2.6
+    assert b["shipped before 2026-09-08"] == pytest.approx(3.98, abs=0.02)
+    assert b["in situ, 8 cards (shipped)"] == pytest.approx(2.49, abs=0.02)
+    assert CHAIN_US_PER_ROW == pytest.approx(0.0424, abs=0.0005), (
+        "the shipped chain constant moved again. It is per PAIR, and it is the in-situ "
+        "level; changing it changes the threshold this repository publishes, so it has "
+        "to be a decision with the record updated, not a quiet retune.")
+    assert us_per_row_here() < CHAIN_US_PER_ROW, "the idle card is cheaper than in situ"
+    assert REFERENCE_PAIRS == 24576
 
-    # nothing has been adopted
-    assert CHAIN_US_PER_ROW == pytest.approx(0.0875, abs=0.0005), (
-        "the shipped chain constant moved. That is a legitimate thing to do, but it "
-        "changes the threshold this repository publishes from 3.98 to about 2.5, so it "
-        "has to be a decision with the gates re-run, not a quiet retune.")
-    assert us_per_row_here() < 0.5 * CHAIN_US_PER_ROW
+    # 7. why nothing here could have caught it: the gate is blind to the constant
+    r = chain_cancels_in_validation()
+    maes = [m for m, _g in r.values()]
+    assert max(maes) - min(maes) < 1e-12, (
+        "the Tier-2 gate now responds to the chain constant (%s). That would be an "
+        "improvement, and this test should be replaced by one that scores it." % maes)
+    assert US_PER_ROW["fused design target"] == 0.0120
 
 
 def test_two_hop_beats_one_hop_measured_across_the_boundary():
@@ -910,11 +944,14 @@ def test_two_hop_beats_one_hop_measured_across_the_boundary():
             "the arrival chain is a fifth to a quarter of two-hop here; if it stops "
             "being that, the term this project keeps calling decisive has moved")
 
-    # the real chain is about half the cost the calibration carries, and that is
-    # recorded rather than adopted
-    assert CHAIN_US_PER_ROW_MEASURED < 0.6 * CHAIN_US_PER_ROW
-    assert CHAIN_US_PER_ROW == pytest.approx(0.0875, abs=0.0005), (
-        "the shipped constant has not been quietly retuned to the new reading")
+    # this in-situ reading IS the shipped constant since 2026-09-08. It was recorded
+    # here as "about half what the calibration carries" and left unadopted; the
+    # calibration turned out to be over-charging by 2.8x from a denominator error, and
+    # this measurement -- taken on the pair count core.py actually charges -- was right.
+    assert CHAIN_US_PER_ROW_MEASURED == pytest.approx(CHAIN_US_PER_ROW, abs=0.0005)
+    assert CHAIN_US_PER_ROW == pytest.approx(0.0424, abs=0.0005), (
+        "the shipped constant is this measurement, adopted 2026-09-08 with the record "
+        "in sim/chain_remeasured.py -- not a quiet retune")
 
     # and the model's accuracy partly rests on cancelling errors: fixing the slow level
     # helps, fixing the chain as well hurts
@@ -965,12 +1002,20 @@ def test_the_supernode_boundary_is_the_first_measured_ratio_above_the_flat_one()
     for q in range(2, 9):
         assert hierarchy_ratio() > byte_breakeven_at_supernode(q)
 
-    # and lands between the two implementation thresholds, which is the finding: the
-    # topology is good enough and the arrival chain is what decides
+    # and it clears every implementation threshold, including the operator chain that
+    # exists. That was not true until 2026-09-08: the chain threshold was 3.98 against
+    # this 2.55 and the chain was what decided. Correcting the chain constant took the
+    # threshold to 2.49, and the least favourable ratio this module measures -- one
+    # uncontended pair, 2.55 -- now clears it by 2%. On the loaded like-for-like ratio
+    # of 5.10 the margin is 2.0x, and both are recorded because the thin one is the
+    # one a verdict has to survive.
     p = placement()
     assert p["clears"]["hypothetical fused target"]
-    assert not p["clears"]["PyTorch chain (measured)"]
-    assert p["decided_by_the_chain"]
+    assert p["clears"]["PyTorch chain (measured)"]
+    assert not p["decided_by_the_chain"]
+    assert 1.0 < p["ratio"] / p["thresholds"]["PyTorch chain (measured)"] < 1.05, (
+        "the uncontended ratio clears the chain threshold, but only just; if that "
+        "margin grows or vanishes the sentence above has to be rewritten")
 
 
 def test_alpha_16_is_a_fitted_artefact_not_a_measurement():
@@ -1159,10 +1204,14 @@ def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
     assert deep == pytest.approx(BOUNDARIES_DIFFER_BY, abs=0.02)
     assert deep > 1.4, "the two boundaries used to differ by 1.48x"
 
-    # even the shallowest clears the operator-chain threshold at the reference width
+    # the shallowest boundary clears the operator-chain threshold at every measured
+    # hidden width. H = 1024 joined the list on 2026-09-08 when the chain constant was
+    # corrected; before that the threshold there was 5.95 against a boundary of 5.10.
     rows = clears_at_hidden_width()
-    assert [H for H, _b, ok in rows if ok] == [2048, 4096, 8192]
-    assert not rows[0][2], "H=1024 should still not clear"
+    assert [H for H, _b, ok in rows if ok] == [1024, 2048, 4096, 8192]
+    assert rows[0][1] == pytest.approx(3.37, abs=0.01)
+    assert rows[1][1] == pytest.approx(2.49, abs=0.01), (
+        "the reference-width threshold moved; docs and the hierarchy table quote it")
 
 
 def test_the_host_regime_decides_which_rule_a_collective_obeys():
@@ -1353,45 +1402,61 @@ def test_the_overlap_form_fits_better_and_is_still_not_adopted():
 def test_arrival_chain_is_only_linear_above_the_measured_floor():
     """The chain constant carries the whole verdict, so its limits are pinned.
 
-    Three things, in order of how much they matter.
+    Four things, in order of how much they matter.
+
+    Every figure has to be in the same unit. The chain is charged per (row, slot) pair,
+    which is what ``rows_hop_b()`` counts; the sweeps that measured it are parameterised
+    by input rows and produce ``quota`` pairs from each. Conflating the two is what
+    over-charged the chain by 2.8x until 2026-09-08, so the conversion is pinned here.
 
     The reference geometry has to sit inside the range where the linear form was
-    verified, or the headline breakeven is quoting a model outside its validity.
+    verified, or the headline breakeven is quoting a model outside its validity. It sits
+    exactly at the bottom edge of it -- 24576 pairs against a floor that closes at
+    24576 -- which the pre-correction note claimed was "inside that range".
 
-    The re-measured level has to stay inside the drift the calibration claims,
-    because that is the only reason the shipped value was not replaced by the better
-    evidenced one.
+    The re-measured level has to stay inside the drift the calibration claims, once both
+    are per pair.
 
     And the direction has to stay recorded: adopting the re-measurement raises the
-    breakeven rather than lowering it. If that ever flips, the argument for leaving
-    the constant alone becomes self-serving and has to be re-made.
+    idle level rather than lowering it.
     """
     from sim.calibrate import (CHAIN_FLOOR_MS, CHAIN_LINEAR_MIN_ROWS,
-                               CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_REMEASURED)
+                               CHAIN_US_PER_ROW, CHAIN_US_PER_ROW_IDLE,
+                               CHAIN_US_PER_ROW_REMEASURED)
+    from sim.chain_remeasured import SWEEP_QUOTA
     from sim.core import MoEGeometry
     from sim.uncertainty import breakeven_ratio
 
     g = MoEGeometry(name="ref", n_groups=16, R=8, k=6, M=2, seq=4096, mbs=1,
                     gbs=16 * 8 * 4096)
+    assert g.rows_hop_b() == 24576
     assert g.rows_hop_b() >= CHAIN_LINEAR_MIN_ROWS, (
-        "the reference geometry has %d Hop B rows, below the %d where the linear "
+        "the reference geometry has %d Hop B pairs, below the %d where the linear "
         "chain form was verified" % (g.rows_hop_b(), CHAIN_LINEAR_MIN_ROWS))
+    assert g.rows_hop_b() == CHAIN_LINEAR_MIN_ROWS, (
+        "the reference geometry used to sit exactly at the edge of the verified range; "
+        "if it no longer does, say which side and why")
 
-    drift = abs(CHAIN_US_PER_ROW_REMEASURED - CHAIN_US_PER_ROW) / CHAIN_US_PER_ROW
+    # CHAIN_US_PER_ROW_REMEASURED is per input row -- that is the unit the sweep reports
+    # in, and keeping it in that unit is what makes the collision visible rather than
+    # invisible. Per pair it is this, and it agrees with the idle level.
+    remeasured_per_pair = CHAIN_US_PER_ROW_REMEASURED / SWEEP_QUOTA
+    drift = abs(remeasured_per_pair - CHAIN_US_PER_ROW_IDLE) / CHAIN_US_PER_ROW_IDLE
     assert drift <= 0.20, (
-        "the chain re-measurement is %.0f%% from the shipped value, outside the 20%% "
-        "drift that justifies leaving it alone" % (100 * drift))
+        "the chain re-measurement is %.0f%% from the idle level once both are per "
+        "pair; they agreed to 9%% when the denominator was corrected" % (100 * drift))
 
-    assert breakeven_ratio(CHAIN_US_PER_ROW_REMEASURED) > breakeven_ratio(CHAIN_US_PER_ROW), (
-        "adopting the chain re-measurement now *helps* two-hop; keeping the older, "
-        "less well evidenced constant would then need a different justification")
+    assert breakeven_ratio(remeasured_per_pair) > breakeven_ratio(CHAIN_US_PER_ROW_IDLE), (
+        "adopting the sweep's own level still raises the threshold rather than lowering "
+        "it, so preferring the lower idle reading would need its own justification")
+    assert CHAIN_US_PER_ROW > remeasured_per_pair, (
+        "the shipped level is the in-situ one and must be the dearer of the two")
 
     # The floor is a real gap, not a rounding difference, or there is nothing to warn
-    # about and the boundary text should go.
-    assert CHAIN_FLOOR_MS > 2.0 * CHAIN_US_PER_ROW * 1024 / 1000.0, (
+    # about and the boundary text should go. 3072 pairs is the sweep's smallest point.
+    assert CHAIN_FLOOR_MS > 1.5 * CHAIN_US_PER_ROW * 3072 / 1000.0, (
         "the measured chain floor no longer exceeds what the linear form predicts at "
-        "1024 rows; the small-geometry boundary in calibrate.py is stale")
-
+        "3072 pairs; the small-geometry boundary in calibrate.py is stale")
 
 def test_host_exposure_does_not_outrank_the_arrival_chain():
     """Fusing the chain must stay worth more than removing the host.

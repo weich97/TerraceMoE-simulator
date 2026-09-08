@@ -15,7 +15,7 @@ much. It is the form of the answer someone deciding whether to adopt actually ne
 
 1. **A hierarchy exists, past the implementation-adjusted breakeven.**
    The byte account alone gives r_be = (1−1/R)·q/(q−1) — 1.31 at R=8, q=3. But the
-   arrival chain moves the real threshold: 3.98 with a PyTorch op chain, 1.49 for
+   arrival chain moves the real threshold: 2.49 with a PyTorch op chain, 1.49 for
    the hypothetical fused target, 1.10 at zero overhead. So the threshold depends on the
    software as much as the fabric, and this check reports it against the tier you
    declare.
@@ -232,11 +232,13 @@ def launch_sensitivity(geom, chain_us_per_row: float,
     written before the cost was measured; it now has a measured point in it.
 
     At the measured host exposure of HOST_EXPOSURE_MS = 0.130, the breakeven on
-    the reference geometry moves from 3.98 to 4.15 -- under 5%, because the
-    arrival chain dominates everything else on this machine. Remove the chain and
-    the same 0.130 moves the breakeven from 1.10 to 1.27, which is 16%. So the
-    ordering is unchanged and worth stating plainly: fuse the chain first, and
-    only then does host exposure become the next thing worth paying for.
+    the reference geometry moves from 2.49 to 2.67 -- 7%, because the arrival chain
+    still dominates everything else on this machine. Remove the chain and the same
+    0.130 moves the breakeven from 1.10 to 1.27, which is 16%. So the ordering is
+    unchanged and worth stating plainly: fuse the chain first, and only then does
+    host exposure become the next thing worth paying for. The margin narrowed on
+    2026-09-08, when the chain constant was corrected downward by 2.8x: the chain's
+    lead over the launch path fell from 2.9 to 1.4 of hierarchy ratio.
 
     The sweep still does **not** answer whether to adopt a device-initiated stack.
     Removing the host from the critical path also changes overlap, and overlap is
@@ -282,7 +284,7 @@ def bandwidth_world_sensitivity(geom=None, chain_us_per_row: float = None) -> li
     world, where delivery is best. Hop A runs at world n_groups and hop B at world R,
     both in the worst part of the curve. So a single beta flatters two-hop, and this
     prices by how much: giving each level the bandwidth measured at its own world
-    moves the effective breakeven from 3.98 to 4.52 on the measured chain, 1.49 to
+    moves the effective breakeven from 2.49 to 2.88 on the measured chain, 1.49 to
     1.78 fused, and 1.10 to 1.34 at zero overhead.
 
     **Not adopted, for two reasons.** Substituting a marginal slope for beta_inf
@@ -296,7 +298,7 @@ def bandwidth_world_sensitivity(geom=None, chain_us_per_row: float = None) -> li
     level across that boundary is the mixing error it warns about.
 
     What survives is the direction, and it runs against the method this repository
-    proposes: the shipped threshold of 3.98 is the flattering end of this sensitivity,
+    proposes: the shipped threshold of 2.49 is the flattering end of this sensitivity,
     not the conservative one. Returns [(tier name, shipped breakeven, per-world
     breakeven), ...].
     """

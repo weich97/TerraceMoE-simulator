@@ -1,6 +1,16 @@
 # -*- coding: utf-8 -*-
 """Re-measure the arrival chain: the constant everything hinges on.
 
+**Outcome (2026-09-08): this run was right and the calibration was wrong.** It came out
+about three times below the shipped constant, which read as a step in the machine and
+was not adopted. It was a unit collision: the calibration's instrument is parameterised
+by *input rows* and expands each into `quota` pairs before the work it times, so its
+sweeps measure the chain over 73728 pairs while the reference geometry has 24576. This
+script's denominator -- output pairs, chosen to match `core.py` -- was the correct one
+all along. `calibrate.CHAIN_US_PER_ROW` is now 0.0424 us per pair and the reference
+threshold is 2.49; see `sim/chain_remeasured.py` for the evidence. The original
+motivation is kept below because it is why the run happened.
+
 `calibrate.CHAIN_US_PER_ROW` is 0.0875 microseconds per Hop-B row, and that file calls
 it "the constant everything hinges on -- it alone moves the breakeven ratio from 1.10 to
 3.98". Two readings stand behind it, and they agree: 2.15 ms at 24576 rows from a single

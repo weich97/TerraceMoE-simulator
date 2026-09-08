@@ -66,7 +66,7 @@ One-hop time / two-hop time (>1 = two-hop faster), 16 groups × R=8, k=6, T=4096
 
 | Implementation tier \ hierarchy ratio | 1.03 (flat) | 3.2 | 8 | 15.7 |
 |---|---|---|---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | 0.40 | 0.87 | 1.51 | 2.04 |
+| PyTorch arrival chain (measured 0.0424 µs/pair) | 0.58 | 1.16 | 1.85 | 2.35 |
 | Hypothetical fused target (0.012) | 0.81 | 1.51 | 2.19 | 2.62 |
 | Zero implementation overhead (upper bound) | 0.97 | 1.70 | 2.36 | 2.74 |
 
@@ -92,45 +92,53 @@ which two-hop starts to win, q=3, T=4096):
 
 | Implementation tier | breakeven hierarchy ratio |
 |---|---|
-| PyTorch arrival chain (measured 0.0875 µs/row) | **3.98** |
+| PyTorch arrival chain (measured 0.0424 µs/pair) | **2.49** |
 | Hypothetical fused target (0.012) | **1.49** |
 | Zero implementation overhead (upper bound) | 1.10 |
 
-> **A second reading of that first row (2026-09-08).** The chain constant has been
-> re-measured at this page's own shape and convention — op level, one card, output pairs
-> as the denominator — and comes out **three times lower**: 0.7235 ms at 24576 pairs
-> against the 2.51 the calibration records, which is 0.0315 µs/row and a breakeven of
-> 2.13 rather than 3.98. Timing the *live* arrival sequence beside the reference puts it
-> only 5 to 16% above, so this is not a cheaper implementation being measured. Two
-> August readings agree with each other, two September readings agree with each other,
-> and they are a factor of three apart, which is a step rather than the documented 20%
-> drift. **Nothing is adopted**, because adopting the newer pair would be choosing by
-> date, and because the shape moved as well as the level. The evidence, the consequence
-> and what would settle it are in [sim/chain_remeasured.py](../sim/chain_remeasured.py).
+> **Correction (2026-09-08).** That first row read **3.98** until the arrival-chain
+> constant behind it was found to be over-charged by 2.8x. Re-measuring the chain at this
+> page's own shape and convention — op level, one card, output pairs as the denominator
+> — gave 0.7235 ms at 24576 pairs against the 2.51 the calibration recorded, which is
+> 0.0291 µs per pair and a breakeven of 2.05. That looked like a threefold step in the
+> machine and was deliberately not adopted.
+>
+> It was not a step. The instrument behind the calibration is parameterised by *input
+> rows* and expands each into `quota` pairs before it times anything, so its sweeps
+> measure the chain over 73728 pairs, not 24576. The reference geometry has 24576 pairs
+> and 8192 input rows. One numeral named both. Six readings at the reference geometry
+> across two dates and three instruments agree to 9%, and none of them is 2.15 ms.
+>
+> The shipped constant is now **0.0424 µs per pair**, the chain measured in situ with all
+> eight cards of a node working — the dearer of the two corrected readings. The evidence
+> is in [sim/chain_remeasured.py](../sim/chain_remeasured.py), which also shows why no
+> test here could have caught it: the chain cancels identically out of the Tier-2 gate.
 
 One-sentence takeaway: in this sensitivity study, the implementation tier moves the
-breakeven from 3.98 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
+breakeven from 2.49 down to 1.49 (or 1.10 at the zero-overhead bound). Whether a target machine
 lands on either side is unresolved until its effective ratio and call costs are measured.
 
 ### The threshold is not flat in hidden width
 
 The breakeven above is stated at H = 2048, because that is where the arrival chain was
 calibrated, and the chain is not independent of H. Sweeping the operator chain over hidden
-widths at a fixed 24576 rows measures 2.37, 2.51, 2.85 and 3.79 ms at H of 1024, 2048, 4096
+widths at a fixed 73728 pairs measures 2.37, 2.51, 2.85 and 3.79 ms at H of 1024, 2048, 4096
 and 8192. Over that fourfold widening the chain grows by 1.51 while the payload every
 collective carries grows by four, so moving H in both places at once lowers the threshold:
 
 | hidden width | 1024 | 2048 | 4096 | 8192 |
 |---|---:|---:|---:|---:|
-| effective breakeven, measured chain | 5.95 | **3.98** | 2.89 | 2.40 |
+| effective breakeven, measured chain | 3.37 | **2.49** | 2.02 | 1.80 |
 
 Reproduce with `sim.uncertainty.breakeven_vs_hidden_width`. `sim/machine.py::chain_us_per_row_at`
-takes the *shape* from that sweep and the *level* from the calibration, so the H = 2048 column
-is exactly the 3.98 above and no other figure in this repository moves. The sweep's own
-H = 2048 point is 2.51 ms against the calibration's 2.15, a gap inside the documented
-run-to-run drift; adopting the sweep's level instead would put the reference threshold at
-4.46. Both readings are defensible and the choice has to be made rather than arrived at by
-mixing the two, which is what the function exists to prevent.
+takes the *shape* from that sweep and the *level* from the in-situ measurement, so the
+H = 2048 column is exactly the 2.49 above and no other figure in this repository moves. The
+sweep's own H = 2048 point is 2.51 ms over 73728 pairs against the 1.042 the shipped level
+carries over 24576 — the difference is load, since the sweep is one idle card; adopting the
+sweep's level instead would put the reference threshold at 2.22. Both readings are
+defensible and the choice has to be made rather than arrived at by mixing the two, which is
+what the function exists to prevent. Until 2026-09-08 the two were mixed in a worse way
+still: they were on different denominators, and the level was three times too high.
 
 The direction is settled by the limit rather than by any constant: every wire term scales
 exactly with H while α and the splits exchange do not, so at large H the comparison
@@ -138,7 +146,7 @@ approaches the byte-only one and the threshold falls toward it. The reference ar
 priced in [docs/12](12-m-quality-experiment.md) has H = 7168, well above the width the
 threshold is stated at, so **a threshold quoted at 2048 over-prices the arrival chain — and
 only two-hop pays it**. That bias runs against the method this repository proposes, which
-makes 3.98 the conservative end of the range rather than the flattering one. An earlier
+makes 2.49 the conservative end of the range rather than the flattering one. An earlier
 version of this analysis scaled the chain with H while holding the payload at the reference
 width and had the sign of the effect backwards; `tests/test_codesign.py` now pins the
 direction as well as the digits.
@@ -159,7 +167,7 @@ Two robustness anchors:
   flat machine is unchanged (docs/03), and it is an implementation verdict, not a bytes verdict.
   Under the fused tier — the best any real implementation has reached — the flat column stays
   below 1;
-- 8× synthetic scenario, least favorable case (PyTorch chain): p5 = **1.41 > 1**. This makes the
+- 8× synthetic scenario, least favorable case (PyTorch chain): p5 = **1.76 > 1**. This makes the
   sign robust inside the model's uncertainty calculation, not on an unmeasured target machine.
 
 ### Scale effects: where does the large-cluster advantage come from?
@@ -205,13 +213,15 @@ and must be re-measured, not inherited.
 Geometry sensitivity (a 54-point (group count, R, k, M) grid, `sim.uncertainty.geometry_grid`)
 is consistent with that mechanism, and carries the same caveat wherever it reaches past 128.
 Ranking the three axes by how far they actually move breakeven (fused tier): **implementation
-tier largest** (3.98 → 1.10, Δ≈2.9) > scale axis (Δ≤1.9, and only the ≤128 part of it is
+tier largest** (2.49 → 1.10, Δ≈1.4) > scale axis (Δ≤1.9, and only the ≤128 part of it is
 trustworthy) > geometry axis ((k,M) moves the breakeven by up to 0.70 at fixed world). The two
 smaller axes are not measured in the same units: the geometry figure is a breakeven
 displacement, while the scale figure is the 1.9× span of the 512-die band. Under the PyTorch
-tier the geometry axis widens to 1.91, so at that tier it is no longer clearly the smallest of
-the three; the fused-tier ordering above is the one that stands. (Corrected 2026-09-05 from
-0.53 and 1.62, which predate the Hop-A self-copy fix.)
+tier the geometry axis widens to 1.26, so at that tier it is still the smallest of the three.
+(Corrected 2026-09-05 from 0.53 and 1.62, which predate the Hop-A self-copy fix; corrected
+again 2026-09-08, when the arrival-chain constant fell by 2.8× and took the implementation
+axis from Δ≈2.9 to Δ≈1.4 with it. The implementation tier is still the largest of the three,
+but it no longer dominates them, and the ordering no longer changes with the tier.)
 
 ## Calibration audit: what 331 measured points say about the constants
 
@@ -360,11 +370,11 @@ prices by how much:
 
 | arrival chain tier | one beta | per-world bandwidth |
 |---|---:|---:|
-| PyTorch chain (measured) | 3.98 | **4.52** |
+| PyTorch chain (measured) | 2.49 | **2.88** |
 | hypothetical fused target | 1.49 | 1.78 |
 | zero implementation overhead | 1.10 | 1.34 |
 
-That is a larger displacement than the measured launch cost produces (3.98 to 4.15), and it
+That is a larger displacement than the measured launch cost produces (2.49 to 2.67), and it
 runs the same way: **against** the method this repository proposes.
 
 **It is not adopted**, for two reasons that matter more than the size of the effect.
@@ -375,7 +385,7 @@ of four corpora: Tier-1 from 4.1% to 7.4%, corpus A from 1.9% to 2.7%, corpus C 
 9.3%, improving only the corpus that already fails, 15.1% to 13.2%. And the slopes come from
 the size-sweep benchmark family while Tier-1 belongs to the other one, which this page records
 as disagreeing in level; importing a level across that boundary is the mixing error the
-calibration warns about. So it ships as a sensitivity, and the honest reading of 3.98 is that
+calibration warns about. So it ships as a sensitivity, and the honest reading of 2.49 is that
 it is the flattering end of this axis rather than the conservative one.
 
 ### A model form we tested and did not adopt

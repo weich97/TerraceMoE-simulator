@@ -94,19 +94,31 @@ cards in a supernode, `r_be = (1-1/R)q/(q-1)` is 1.98 at q = 2 and 1.49 at q = 3
 quota from 2 up passes.
 
 Against the effective thresholds it depends on hidden width, and that dependence is the
-result worth carrying:
+result worth carrying. Every row is against the **shallower** of the two boundaries,
+5.10, because a verdict has to use the one that clears least easily:
 
-    H = 1024    threshold 5.95    not cleared
-    H = 2048    threshold 3.98    not cleared
-    H = 4096    threshold 2.89    **cleared**
-    H = 8192    threshold 2.40    **cleared**
+    H = 1024    threshold 3.37    **cleared**
+    H = 2048    threshold 2.49    **cleared**
+    H = 4096    threshold 2.02    **cleared**
+    H = 8192    threshold 1.80    **cleared**
 
 The threshold falls with H because the payload grows by four over a fourfold widening
-while the arrival chain grows by 1.5. So at the reference width the arrival chain still
-decides, and **at the widths contemporary models actually use -- 7168 in DeepSeek-V3,
-which docs/12 prices -- the measured boundary clears the threshold for the operator
-chain this repository already has.** That is the first configuration in this project
-where the model says two-hop wins with software that exists.
+while the arrival chain grows by 1.5. **Both measured boundaries clear the threshold for
+the operator chain this repository already has, at every hidden width it has been
+measured at**, and the margin is 1.5x at the reference width rising to 2.8x at 8192.
+That is the first configuration in this project where the model says two-hop wins with
+software that exists -- and the measurement in `sim/twohop_measured.py` then confirmed
+it on the deeper boundary.
+
+> **Third correction (2026-09-08).** This table read 5.95 / 3.98 / 2.89 / 2.40 with the
+> first two marked "not cleared", and it was wrong twice over. It was computed against
+> the 3.47 ratio the correction above had already withdrawn, so the H = 2048 row was
+> stale from the moment that ratio was replaced by 5.10; `clears_at_hidden_width()` had
+> the boundary right all along and only the prose was behind. And the thresholds
+> themselves have since fallen by a third, because the arrival-chain constant they are
+> computed from was over-charged 2.8x by a denominator error
+> ([chain_remeasured](chain_remeasured.py)). Both errors pointed the same way, against
+> the method.
 
 The contention measurement is what makes that statement stronger rather than weaker,
 which was not the expected direction. Pressure on the boundary lowers the slow side,

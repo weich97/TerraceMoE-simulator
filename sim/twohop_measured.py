@@ -55,8 +55,8 @@ part:
 
     one hop      accurate to 1-3%
     Hop A        under-priced by 2.2 to 2.5x
-    chain        over-priced by about 2x: 0.0424 us per row measured
-                 against the 0.0875 the calibration ships
+    chain        over-priced by 2.06x: 0.0424 us per row measured
+                 against the 0.0875 the calibration shipped
     Hop B        under-priced by 13 to 32%
 
 The Hop A error is mine and it is instructive. The `slow` level was given the bandwidth
@@ -69,6 +69,19 @@ well pushes it back to 15.1%, because that removes an error that was compensatin
 
 So the model's aggregate accuracy here rests partly on two errors cancelling, and this
 module records both rather than quietly fixing one.
+
+> **Update (2026-09-08, later the same day).** One of the two has now been fixed, and
+> not by choice: the chain was not "over-priced on one run" but wrong by construction.
+> The calibration divided a 73728-pair measurement by 24576, and the 0.0424 measured
+> here -- taken on the pair count `core.py` actually charges -- is the correct level.
+> It is now `calibrate.CHAIN_US_PER_ROW`; see [chain_remeasured](chain_remeasured.py).
+>
+> That removes the compensating error. The shipped model is now the mixture slow level
+> with the measured chain, a fourth combination not among the three below, and by the
+> mechanism the third row demonstrates it must score **worse** than 0.140 here. That is
+> the right trade: the model is now wrong in one term instead of wrong in two that
+> happened to cancel, and the remaining error has a named cause and a known fix. Hop A
+> is still fed a mixture, and closing this gap means fixing that.
 
 ## What this is not
 
@@ -102,16 +115,19 @@ N_GROUPS = 2
 CARDS_PER_GROUP = 64
 BOUNDARY = "pool110/pool12"
 
-#: Per-row cost of the real arrival chain at these shapes, against the shipped constant.
-#: The chain is cheaper than the calibration says by about half. Recorded, not adopted:
-#: this is one run of one shape family on one machine, and calibrate.py's constant has
-#: its own provenance and its own sweep behind it.
+#: Per-pair cost of the real arrival chain at these shapes. Recorded here as "cheaper
+#: than the calibration says by about half" and deliberately not adopted, on the grounds
+#: that one run of one shape family should not displace a constant with a sweep behind
+#: it. The sweep turned out to be in different units; this reading was right, and since
+#: 2026-09-08 it *is* calibrate.CHAIN_US_PER_ROW.
 CHAIN_US_PER_ROW_MEASURED = 0.0424
 
 #: Median relative error of the model's G under three parameterisations, from the
-#: comparison in the module docstring. The middle one is the honest fix for the Hop A
-#: error; the third shows that adopting the measured chain on top removes a
-#: compensating error and makes the total worse.
+#: comparison in the module docstring, all computed under the pre-2026-09-08 chain
+#: constant. The middle one is the honest fix for the Hop A error; the third shows that
+#: adopting the measured chain on top removes a compensating error and makes the total
+#: worse. The chain has since been adopted for a reason unrelated to this comparison, so
+#: none of the three is the shipped combination any more -- see the update above.
 MODEL_ERROR = {"slow level fed a mixture": 0.140,
                "slow level as a pure tier": 0.090,
                "pure tier and measured chain": 0.151}
@@ -162,8 +178,10 @@ def main() -> None:
           % (100 * MODEL_ERROR["slow level as a pure tier"]))
     print("cross-boundary tier of %.1f GB/s instead of a mixture. The arrival chain"
           % PURE_CROSS_BOUNDARY_GBPS)
-    print("measures %.4f us per row against the %.4f the calibration ships."
+    print("measures %.4f us per pair against the %.4f the calibration shipped -- and"
           % (CHAIN_US_PER_ROW_MEASURED, 0.0875))
+    print("that measurement is now the shipped constant: the 0.0875 divided a")
+    print("73728-pair sweep by 24576. See sim/chain_remeasured.py.")
     print()
     print("Communication-call level only. Tier-2 fails, so nothing here is a claim")
     print("about training throughput, and the seven end-to-end geometries of docs/03")

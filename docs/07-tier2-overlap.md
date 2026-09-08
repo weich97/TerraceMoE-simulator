@@ -16,25 +16,38 @@ All figure numbers are produced live by `python -m sim.overlap`; the script is t
 
 | Family | Structure (Δ = predicted two-hop step delta) | Parameter (solved from flag) | Holdout MAE | within ±0.035 | negative-sign direction | Gate |
 |---|---|---|---|---|---|---|
-| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | 0.140 | 0/6 | 5/5 | fail |
-| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.153 | 0.150 | 0/6 | 0/5 | fail |
-| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 2.51 ms | 0.060 | 4/6 | 3/5 | fail |
-| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.14 | 0.133 | 0/6 | 0/5 | fail |
-| M4 | hiding ∝ compute: Δ = Δmodel − c·T_comp | c = 0.299 | **0.045** | 2/6 | **5/5** | fail |
-| M5 | exposure ∝ pipeline pressure: Δ = Δmodel·(1−λ/mbs) | λ = 1.153 | 0.088 | 2/6 | 2/5 | fail |
+| M0 | naive: Δ = Δmodel (no overlap, current baseline) | — | **0.048** | 3/6 | **5/5** | fail |
+| M1 | proportional exposure: Δ = φ·Δmodel | φ = −0.311 | 0.153 | 0/6 | 0/5 | fail |
+| M2 | per-call hiding: Δ = Δmodel − h·calls | h = 1.40 ms | 0.080 | 1/6 | 3/5 | fail |
+| M3 | hidden fixed cost: Δ = Δmodel − φ·fixed | φ = 1.29 | 0.133 | 0/6 | 0/5 | fail |
+| M4 | hiding ∝ compute: Δ = Δmodel − c·T_comp | c = 0.167 | 0.080 | 1/6 | **5/5** | fail |
+| M5 | exposure ∝ pipeline pressure: Δ = Δmodel·(1−λ/mbs) | λ = 1.311 | 0.108 | 0/6 | 2/5 | fail |
 
 Gate = holdout MAE ≤ 0.025 AND ≥4/6 within ±0.035 AND every negative-sign point directionally correct — threshold numbers carried over from the Tier-2 prespecification (no public timestamped registration); the denominator honestly counts the 6 holdout points that exist (n4 is a scale-axis point added later). Negative-sign points = the 4 prespecified ones (tok2x/tok4x/k8m4/n8) + n4; k8m2 (G=0.9935, within n=1 noise of 1) is excluded from the direction count.
 Fitting used only the calibration point flag; the six holdout points never participated — the failures in the table are real failures, not overfitting failures.
 
 Two reading notes:
 
-- **The closest in magnitude (M2, MAE 0.060) flips sign on the scale axis**: it predicts
-  two-hop winning at n8/n4, while measurement shows two-hop losing badly (G=0.90/0.86). The
-  picture of hiding a fixed number of milliseconds per call over-hides once the call count doubles.
-- **The one with perfect direction (M4, 5/5) misses the magnitude gate by 2×**: the picture of
-  hidden time proportional to compute time captures the structure, but a single global
-  coefficient cannot balance the tension between "flag: two-hop actually wins back 151 ms" and
-  "n4: two-hop loses 1833 ms".
+- **No overlap family beats doing nothing.** M0 fits no parameter at all and is the most
+  accurate of the six, on magnitude (0.048 against 0.080 for the next two) and on
+  direction (5/5). Every structure that hides time makes the prediction worse. The
+  honest reading is that there is no evidence here for *any* of these overlap pictures,
+  not that one of them is nearly right.
+- **The naive baseline still misses the gate by 2×**, at 0.048 against 0.025, and only
+  3 of 6 holdouts land inside ±0.035. So the negative result is unchanged in force: the
+  communication ratios of docs/05 may not be read as step-level speedups. What changed
+  is that the gap is now a plain under-modelling of the step rather than a contest
+  between six equally unsupported corrections.
+
+> **Correction (2026-09-08).** This table read 0.140 / 0.150 / 0.060 / 0.133 / 0.045 /
+> 0.088, with M4 marked best on magnitude and M2 closest in the reading notes. Every
+> cell moved because the arrival-chain constant they are computed from was over-charged
+> by 2.8x, from a denominator error described in
+> [sim/chain_remeasured.py](../sim/chain_remeasured.py). The reordering is the
+> substantive part: **M0 went from worst-but-one to best**, which means the fitted
+> overlap coefficients had been absorbing the chain's excess rather than describing
+> anything about overlap. The gate verdict is unchanged -- all six still fail -- and
+> `tests/test_sim.py` pins the new cells and the new ordering.
 
 ## 2. Why it stops here: the degrees-of-freedom ledger
 
@@ -106,7 +119,7 @@ while the holdout points need a machine allocation at target scale.
   4.1%).
 - This doc's negative result is confined to "step-level synthesis": do **not** treat the
   communication-level ratios of docs/05 as end-to-end speedups — that is exactly M0's mistake
-  (MAE 0.140, the first row of the table in §1).
+  (MAE 0.048, the first row of the table in §1).
 
 *(Both figures in this section were corrected on 2026-09-05, and they were wrong in two
 different ways. The Tier-1 median read 8.1%, the value from before the Hop-A self-copy fix.

@@ -9,7 +9,7 @@ the two directional checks the published record permits (sim/record.py).
 """
 import pytest
 
-from sim.machine import (BYTES_BF16, CHAIN_H_SWEEP_MS, CHAIN_H_SWEEP_ROWS,
+from sim.machine import (BYTES_BF16, CHAIN_H_SWEEP_MS, CHAIN_H_SWEEP_PAIRS,
                          FUSED_CHAIN, GATHER_GBPS_MEASURED, INDEX_NS_PER_ROW,
                          NO_CHAIN, PYTORCH_CHAIN, Accelerator)
 from sim.codesign import (REFERENCE_ARCH, UNMEASURED, MemoryProfile, MoEArch,
@@ -35,7 +35,7 @@ def test_chain_model_reproduces_hidden_width_sweep_to_3_percent():
     a = machine_a_accel()
     worst = 0.0
     for H, measured in CHAIN_H_SWEEP_MS.items():
-        model = PYTORCH_CHAIN.ms(CHAIN_H_SWEEP_ROWS, H, a)
+        model = PYTORCH_CHAIN.ms(CHAIN_H_SWEEP_PAIRS, H, a)
         err = abs(model - measured) / measured
         worst = max(worst, err)
         assert err < 0.03, "H=%d: model %.3f vs measured %.3f (%.1f%%)" % (
@@ -45,48 +45,62 @@ def test_chain_model_reproduces_hidden_width_sweep_to_3_percent():
 
 
 def test_chain_floor_binds_at_small_row_counts():
-    # The row sweep measured the whole chain at 0.248 ms at 1024 rows; the model's
-    # floor is two launches, 0.258 ms, within 5 percent of the measurement.
+    # The row sweep measured the whole chain at 0.248 ms at its smallest point, 1024
+    # input rows -- which is 3072 pairs, the denominator every chain figure here is
+    # now stated in. The model's floor is two launches, 0.258 ms, within 5 percent.
     a = machine_a_accel()
-    model = PYTORCH_CHAIN.ms(1024, 2048, a)
+    model = PYTORCH_CHAIN.ms(3072, 2048, a)
     assert model == pytest.approx(2 * LAUNCH_MS_A)
     assert abs(model - 0.248) / 0.248 < 0.05
     # and the floor is genuinely the max, not an addition
-    assert PYTORCH_CHAIN.ms(CHAIN_H_SWEEP_ROWS, 2048, a) > model
+    assert PYTORCH_CHAIN.ms(CHAIN_H_SWEEP_PAIRS, 2048, a) > model
 
 
 def test_chain_per_row_cost_sits_at_the_row_sweep_bracket():
-    # 85.8 ns of index work plus 16.7 ns of gather at H=2048 is 102.5 ns per row,
-    # against the 86.5 to 101.8 ns the row sweep measures directly.
+    # 28.6 ns of index work plus 5.6 ns of gather at H=2048 is 34.2 ns per pair,
+    # against the 28.4 to 34.7 ns the row sweep measures directly once its own
+    # per-input-row figures are put on the pair denominator.
+    #
+    # All three were three times larger until 2026-09-08, because the sweep's input
+    # row count was used where its pair count belonged. The model reproduced the
+    # sweep either way -- index and gather scaled together -- which is exactly why
+    # this test did not catch it. See sim/chain_remeasured.py.
     a = machine_a_accel()
     ns = PYTORCH_CHAIN.ns_per_row(2048, a)
-    assert ns == pytest.approx(102.5, abs=0.5)
-    assert INDEX_NS_PER_ROW == pytest.approx(85.8, abs=0.1)
-    assert GATHER_GBPS_MEASURED == pytest.approx(490, abs=2)
+    assert ns == pytest.approx(34.2, abs=0.5)
+    assert INDEX_NS_PER_ROW == pytest.approx(28.6, abs=0.1)
+    assert GATHER_GBPS_MEASURED == pytest.approx(1469, abs=2)
 
 
-def test_fused_chain_brackets_the_design_target():
-    # K1 pays the gather and not the index work: 8.4 ns (write straight to the send
-    # buffer) to 16.7 ns (materialise the payload) at H=2048. The 0.012 us/row design
-    # target quoted throughout the repository is 12 ns and must sit inside.
+def test_fused_chain_target_is_conservative_against_the_physics():
+    # K1 pays the gather and not the index work: 2.8 ns (write straight to the send
+    # buffer) to 5.6 ns (materialise the payload) per pair at H=2048.
+    #
+    # The 0.012 us/row design target quoted throughout the repository is 12 ns and sits
+    # *above* both, so it is conservative by two- to fourfold and the fused threshold of
+    # 1.49 is a ceiling on what fusing buys rather than an estimate of it. On the
+    # pre-2026-09-08 denominator the same arithmetic gave 8.4 to 16.7 ns and the target
+    # landed neatly between them, which read as independent confirmation of a figure
+    # that had been entered as a guess. It was arithmetic on the wrong count.
     a = machine_a_accel()
     lo = FUSED_CHAIN.gather_ns_per_row(2048, a)          # traffic = 1
     hi = PYTORCH_CHAIN.gather_ns_per_row(2048, a)        # traffic = 2
-    assert lo == pytest.approx(8.4, abs=0.1)
-    assert hi == pytest.approx(16.7, abs=0.1)
-    assert lo < 12.0 < hi
+    assert lo == pytest.approx(2.79, abs=0.05)
+    assert hi == pytest.approx(5.58, abs=0.05)
+    assert hi < 12.0, "the design target is no longer conservative; re-derive it"
     assert NO_CHAIN.ns_per_row(2048, a) == 0.0
 
 
 def test_chain_cost_at_the_reference_width_is_the_shipped_constant():
     """The hidden-width shape must not move the level every other figure is stated at.
 
-    Two measurements of the chain disagree by the documented run-to-run drift: 2.15 ms
-    at 24576 rows in the calibration, 2.51 ms at the same rows in the hidden-width
-    sweep. The sweep is the only one that resolves the shape in H, so the shape is
-    taken from it and the level from the calibration. If that ever stops holding, the
-    reference threshold of 3.98 silently becomes 4.46 -- a defensible reading of the
-    same data, but a different one, and not something to arrive at by accident.
+    The shape and the level come from different measurements, and until 2026-09-08 they
+    also came from different denominators, which is how a factor of three got in. Both
+    are now per pair: the shape from the hidden-width sweep at 73728 pairs, the level
+    from the in-situ two-hop run at the reference geometry's 24576. If the level ever
+    drifts back to the sweep's own, the reference threshold moves from 2.49 to 2.09 --
+    a defensible reading of the same data, but a different one, and not something to
+    arrive at by accident.
     """
     from sim.calibrate import CHAIN_US_PER_ROW
     from sim.machine import CHAIN_H_SWEEP_MS, chain_us_per_row_at
@@ -121,7 +135,7 @@ def test_breakeven_falls_with_hidden_width():
     bes = [b for _H, b in rows]
     assert bes == sorted(bes, reverse=True), (
         "the threshold must fall as hidden width grows, got %s" % bes)
-    for (H, got), doc in zip(rows, (5.95, 3.98, 2.89, 2.40)):
+    for (H, got), doc in zip(rows, (3.37, 2.49, 2.02, 1.80)):
         assert abs(got - doc) <= 0.005, (
             "H=%d breakeven %.4f deviates from the docs/05 table's %.2f; correct one "
             "side or the other, never leave them apart" % (H, got, doc))
@@ -168,10 +182,10 @@ def test_unmeasured_residency_marks_every_downstream_result():
 
 
 def test_docs12_group_cap_table_cell_by_cell():
-    expected = {  # docs/12-m-quality-experiment.md, corrected 2026-09-01
-        4: (0.948, 1.490),
-        2: (1.204, 2.234),
-        1: (1.391, 2.979),
+    expected = {  # docs/12-m-quality-experiment.md, corrected 2026-09-08
+        4: (1.362, 1.649),
+        2: (1.960, 2.614),
+        1: (2.510, 3.694),
     }
     for M, q, g16, gfu in m_table():
         e16, efu = expected[M]

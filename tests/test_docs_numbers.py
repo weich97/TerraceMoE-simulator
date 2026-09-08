@@ -143,7 +143,7 @@ claim("docs/05-simulator.md",
 # -- docs/05: the two headline tables ---------------------------------------
 
 claim("docs/05-simulator.md",
-      "| PyTorch arrival chain (measured 0.0875 µs/row) | {n} | {n} | {n} | {n} |",
+      "| PyTorch arrival chain (measured 0.0424 µs/pair) | {n} | {n} | {n} | {n} |",
       lambda: _sweep_row(0), 0.005)
 
 claim("docs/05-simulator.md",
@@ -157,7 +157,7 @@ claim("docs/05-simulator.md",
 # The three breakeven rows are matched as one block: taken singly, each row's opening
 # is also the opening of a row in the sweep table above it.
 claim("docs/05-simulator.md",
-      "| PyTorch arrival chain (measured 0.0875 µs/row) | **{n}** | "
+      "| PyTorch arrival chain (measured 0.0424 µs/pair) | **{n}** | "
       "| Hypothetical fused target (0.012) | **{n}** | "
       "| Zero implementation overhead (upper bound) | {n} |",
       _breakevens, 0.005)
@@ -290,8 +290,8 @@ claim("README.md",
       lambda: _verdict_span(), 0.006)
 
 claim("docs/05-simulator.md",
-      "comes out **three times lower**: {n} ms at 24576 pairs against the {n} the "
-      "calibration records, which is {n} µs/row and a breakeven of {n} rather than 3.98.",
+      "gave {n} ms at 24576 pairs against the {n} the calibration recorded, which is "
+      "{n} µs per pair and a breakeven of {n}.",
       lambda: _chain_second_reading(), 0.006)
 
 # -- docs/07: the overlap family table and its cross-references -------------
@@ -343,9 +343,23 @@ claim("README.md",
       lambda: _chain_fit() + [_chain_shares()[0]], 0.5)
 
 claim("README.md",
-      "{n} and {n} against {n} and {n} as `sim.uncertainty.breakeven_vs_hidden_width` "
-      "computes them.",
+      "v1 gives {n} and {n} at H of 1024 and 4096; "
+      "`sim.uncertainty.breakeven_vs_hidden_width` now computes {n} and {n}.",
       lambda: [5.96, 2.90, _hidden_width_series()[0], _hidden_width_series()[2]], 0.005)
+
+claim("README.md",
+      "The corrected threshold is **{n}**",
+      lambda: [_breakevens()[0]], 0.005)
+
+claim("README.md",
+      "| chain cost per pair | {n} us | **{n} us** | "
+      "| index work per pair | {n} ns | {n} ns | "
+      "| row-gather bandwidth | {n} GB/s | {n} GB/s |",
+      lambda: _correction_table(), 0.5)
+
+claim("README.md",
+      "| **effective breakeven ratio** | **{n}** | **{n}** |",
+      lambda: [3.98, _breakevens()[0]], 0.005)
 
 claim("README.md",
       "At 512 ranks they span {n} to {n},",
@@ -370,7 +384,7 @@ claim("docs/05-simulator.md",
       lambda: _hidden_width_series(), 0.005)
 
 claim("docs/05-simulator.md",
-      "H = 2048 point is {n} ms against the calibration's {n}",
+      "H = 2048 point is {n} ms over 73728 pairs against the {n} the shipped level",
       lambda: _chain_levels(), 0.005)
 
 claim("docs/05-simulator.md",
@@ -480,12 +494,27 @@ def _contention():
     return CONTENTION
 
 
+def _correction_table():
+    """The README's before/after table for the arrival-chain denominator correction.
+
+    The "before" column is history and is hard-coded on purpose; the "after" column has
+    to come from the modules that own each number, or the table can drift away from the
+    code the way the constant itself drifted away from the machine."""
+    from sim.calibrate import CHAIN_US_PER_ROW
+    from sim.machine import GATHER_GBPS_MEASURED, INDEX_NS_PER_ROW
+    return [0.0875, CHAIN_US_PER_ROW,
+            85.8, INDEX_NS_PER_ROW,
+            490.0, GATHER_GBPS_MEASURED]
+
+
 def _chain_second_reading():
+    """The reference geometry re-measured, against the sweep the calibration used --
+    which is at three times the pairs, which is the whole story."""
     from sim.chain_remeasured import US_PER_ROW, WIDTH_SWEEP, breakevens
     from sim.machine import CHAIN_H_SWEEP_MS
     return [dict(WIDTH_SWEEP)[2048], CHAIN_H_SWEEP_MS[2048],
-            US_PER_ROW["live chain today, one card"],
-            breakevens()["live chain today, one card"]]
+            US_PER_ROW["one idle card, September"],
+            breakevens()["one idle card, September"]]
 
 
 def _verdict_rows():
@@ -534,12 +563,15 @@ def _hidden_width_series():
 
 
 def _sweep_level_breakeven():
-    """The threshold under the sweep's own arrival-chain level rather than the
-    calibration's. docs/05 reports both, because the gap between the two is the
-    run-to-run drift already documented for that constant."""
-    from sim.machine import CHAIN_H_SWEEP_MS, CHAIN_H_SWEEP_ROWS
+    """The threshold under the sweep's own arrival-chain level rather than the in-situ
+    one. docs/05 reports both, because the gap between them is the cost of load: the
+    sweep is one idle card and the shipped level is eight working ones.
+
+    Both are now divided by the sweep's *pair* count. Dividing this one by its input
+    row count instead is the error that put the shipped threshold at 3.98."""
+    from sim.machine import CHAIN_H_SWEEP_MS, CHAIN_H_SWEEP_PAIRS
     from sim.uncertainty import breakeven_ratio
-    return breakeven_ratio(CHAIN_H_SWEEP_MS[2048] * 1000.0 / CHAIN_H_SWEEP_ROWS)
+    return breakeven_ratio(CHAIN_H_SWEEP_MS[2048] * 1000.0 / CHAIN_H_SWEEP_PAIRS)
 
 
 def _chain_fit():
