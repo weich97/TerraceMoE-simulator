@@ -67,25 +67,23 @@ All three axes trend in the direction the mechanism predicts, which is more conv
 
 As of our survey (2026-08), wherever a rack-level/supernode-level high-bandwidth domain exists, public training-side deployments keep EP inside the domain and go DP/PP across domains (the generation trained on 8-card NVLink domains routinely ran EP across nodes — exactly the classic scenario for this method family); no public work yet stretches EP beyond a **supernode-level** domain. If your scenario must cross it (the experts don't fit inside the domain, or fault tolerance left the domain degraded), the two-hop criterion passes easily at that level — but you would be first: there is no public data on α behavior and incast there, and you must measure it yourself.
 
-**We measured it.** The machine the negative result above was taken on is two racks, and the seven geometries all ran inside one of them, where the ratio is 1.03 and there is nothing for two-hop to buy. Crossing the boundary is a different machine in the only sense that matters here: an all-to-all of identical structure, same world, same sizes, same session, delivers 102 GB/s within a rack and 40 across, a **measured hierarchy ratio of 2.55** ([sim/hierarchy.py](../sim/hierarchy.py), instrument in [bench/a2a_form_probe.py](../bench/a2a_form_probe.py)). Deconvolving the intra-node share puts the pure tiers at 89 against 25 GB/s, a ratio of 3.54.
+**We measured it.** The machine the negative result above was taken on is one supernode of three that share a filesystem, and the seven geometries all ran inside one of them, where the ratio is 1.03 and there is nothing for two-hop to buy. Crossing between supernodes is a different machine in the only sense that matters here.
 
-**And then we measured the contention**, because a single crossing pair is the least contended case there is and real expert parallelism crosses with every node at once. Sixteen nodes, eight per rack, each pair doing the identical world-16 a2a, with only the number of active pairs changed:
+Two boundaries have now been measured, with the identical like-for-like collective — a plain all-to-all over 128 ranks, eight nodes in each supernode, against the same collective inside one supernode (the shipped 117.8 GB/s):
 
-| pairs crossing concurrently | 1 | 2 | 4 | 8 |
-|---|---:|---:|---:|---:|
-| per-card cross-rack GB/s | 39.7 | 22.2 | 22.1 | 22.4 |
+| supernode pair | cross-supernode GB/s | hierarchy ratio |
+|---|---:|---:|
+| pool110 / pool111 | 23.1 | **5.10** |
+| pool110 / pool12 | 15.7 | **7.51** |
 
-There is no collapse. A single pair gets more than its share; from two pairs upward every pair settles at 22 GB/s and stays there, flat to 1% out to eight, with aggregate throughput scaling perfectly linearly over that range. The boundary is not a narrow shared pipe. **So the 2.55 above understates the hierarchy**, and the figure to use is the like-for-like one at a world both configurations share: a world-128 a2a delivers 117.8 GB/s inside a rack (the shipped constant) against **33.9 GB/s measured across both**, a ratio of **3.47**.
+**The boundary is not one number**: the two pairs differ by 1.48×, so any verdict should use the shallower, 5.10. Both are deeper than the 3.47 first reported here, which came from a slope fitted through a non-monotone point; the correction and its cause are in [sim/hierarchy.py](../sim/hierarchy.py).
 
-That clears the byte criterion at every quota — with a rack as the fast domain, R = 128, so q=3 needs only 1.49. Against the effective thresholds it depends on hidden width, and that is the result worth carrying:
+Two things were measured that could have sunk this, and neither did.
 
-| hidden width | 1024 | 2048 | 4096 | 8192 |
-|---|---:|---:|---:|---:|
-| threshold, measured operator chain | 5.95 | 3.98 | **2.89** | **2.40** |
-| 3.47 clears it | no | no | **yes** | **yes** |
+**Contention does not collapse the boundary.** Holding the work identical and varying only how many node pairs cross concurrently: 39.7 GB/s per card with one pair, then 22.2, 22.1 and 22.4 at two, four and eight — one step, then flat to 1%, with aggregate throughput scaling linearly from two pairs up. And the step points the helpful way: pressure lowers the slow side, and two-hop exists to send fewer bytes across the slow side.
 
-At the reference width the arrival chain still decides. **At the widths contemporary models actually use — 7168 in DeepSeek-V3 — the measured boundary clears the threshold for the operator chain this repository already has.** That is the first configuration here where the model says two-hop wins with software that exists rather than software that would have to be written.
+**Spreading the bytes over fewer peers costs nothing.** Hop A runs at world = group count, so it has the fewest cross-supernode peers of anything in the scheme — one, on a two-supernode job. Measured directly, with every card sending only across the boundary, per-card bandwidth is 7.82 GB/s at one peer and 8.03 at sixty-four: flat to 2.6% over a sixty-fourfold change in spread. Hop A pays nothing for being narrow.
 
-Note which way the contention pushed. Pressure lowers the slow side, and two-hop exists to send fewer bytes across the slow side, so a more contended boundary favours it; the worry that real expert parallelism would sink the verdict is refuted rather than confirmed.
+So the ratio clears the byte criterion at every quota — with a supernode as the fast domain, R = 128, so q=3 needs only 1.49 — and it clears the **effective** threshold for the arrival chain this repository already has, 3.98 at the reference hidden width, on both boundaries.
 
-Three things this is not: an end-to-end verdict, because expert parallelism across two racks is 256 cards and α past world 128 is unsupported, and because the two-hop chain itself has not been measured across the boundary; a step-time claim, which Tier-2 forbids; and a reason to reread the negative result above, which was taken inside a rack and stands exactly as measured.
+Three things this is not: an end-to-end verdict, because expert parallelism across two supernodes is 256 cards and α past world 128 is unsupported, and because the two-hop chain itself has not been measured across the boundary; a step-time claim, which Tier-2 forbids; and a reason to reread the negative result above, which was taken inside one supernode and stands exactly as measured.

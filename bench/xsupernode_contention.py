@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-"""How does cross-rack bandwidth hold up when many node pairs cross at once?
+"""How does cross-supernode bandwidth hold up when many node pairs cross at once?
 
-The rack boundary was measured with exactly one node pair crossing, which is the least
-contended case there is. Real expert parallelism crosses with every node in the rack at
-once, sharing whatever uplinks the rack has. Nothing in the cost model prices that, and
+The supernode boundary was measured with exactly one node pair crossing, which is the least
+contended case there is. Real expert parallelism crosses with every node in the supernode at
+once, sharing whatever uplinks the supernode has. Nothing in the cost model prices that, and
 it is the term that could invert the verdict the single-pair measurement suggests.
 
 The design holds structure fixed and varies only pressure. Sixteen nodes, eight in each
-rack, paired node i with node i+8. Each pair forms a 16-rank subgroup whose all-to-all
+supernode, paired node i with node i+8. Each pair forms a 16-rank subgroup whose all-to-all
 is exactly the configuration already measured: seven intra-node peers and eight across
 the boundary. Then the same subgroup a2a is timed with 1, 2, 4 and 8 pairs running
 concurrently. Every subgroup does identical work at every step, so a slowdown is
 contention on the shared boundary and nothing else.
 
 One more phase costs nothing while the allocation is held: a single all-to-all over all
-128 ranks, which is the full cross-rack fabric at the scale expert parallelism would
+128 ranks, which is the full cross-supernode fabric at the scale expert parallelism would
 actually use.
 
 Timed in the percall convention -- ranks aligned, then one call timed with the host
@@ -59,7 +59,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--calls", type=int, default=9)
-    ap.add_argument("--nodes-per-rack", type=int, default=8)
+    ap.add_argument("--nodes-per-supernode", type=int, default=8)
     ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
@@ -69,7 +69,7 @@ def main():
     torch.npu.set_device(local)
     dist.init_process_group(backend="hccl", device_id=torch.device("npu", local))
 
-    npr = args.nodes_per_rack
+    npr = args.nodes_per_supernode
     per_node = world // (2 * npr)
     my_node = rank // per_node
     my_pair = my_node % npr                        # node i pairs with node i+npr
@@ -116,7 +116,7 @@ def main():
         del inp, out
         torch.npu.empty_cache()
 
-        # the whole fabric across both racks, same size
+        # the whole fabric across both supernodes, same size
         g_numel = nbytes // 2
         if g_numel % world == 0:
             gi = torch.ones(g_numel, dtype=torch.bfloat16, device="npu")
@@ -136,7 +136,7 @@ def main():
 
     if rank == 0:
         with open(args.out, "w", encoding="utf-8") as fh:
-            json.dump({"tag": args.tag, "world": world, "nodes_per_rack": npr,
+            json.dump({"tag": args.tag, "world": world, "nodes_per_supernode": npr,
                        "per_node": per_node, "rows": rows}, fh, indent=1)
         print("wrote %s" % args.out, flush=True)
     dist.destroy_process_group()

@@ -743,7 +743,7 @@ def test_the_beta_table_covers_the_domain_it_is_asked_about():
     for got, want in zip(kept, old):
         assert got == pytest.approx(want, rel=1e-12)
 
-    # and the table tracks the curve it samples, everywhere a message can land
+    # and the table tsupernodes the curve it samples, everywhere a message can land
     def exact(x):
         return BETA_FLAT * x / (x + X_HALF_FLAT)
 
@@ -823,23 +823,23 @@ def test_per_world_bandwidth_moves_the_verdict_against_two_hop():
     assert rows[0][2] - rows[0][1] > 4.15 - 3.98
 
 
-def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
+def test_the_supernode_boundary_is_the_first_measured_ratio_above_the_flat_one():
     """The measured hierarchy ratio, and where it places.
 
     Every ratio above 1.03 in this repository was a synthetic sensitivity. The machine
-    the flat verdict was taken on is two racks, the seven end-to-end geometries all ran
+    the flat verdict was taken on is two supernodes, the seven end-to-end geometries all ran
     inside one of them, and crossing between them had never been measured. It has been
     now: two all-to-alls of identical structure differing only in whether the remote
-    peers are in the same rack.
+    peers are in the same supernode.
     """
-    from sim.hierarchy import (CARDS_PER_RACK, MEASURED, RATIO_BURST, RATIO_PERCALL,
-                               byte_breakeven_at_rack, hierarchy_ratio,
+    from sim.hierarchy import (CARDS_PER_SUPERNODE, MEASURED, RATIO_BURST, RATIO_PERCALL,
+                               byte_breakeven_at_supernode, hierarchy_ratio,
                                marginal_gbps, placement, remote_tier_gbps)
     from sim.hostregime import MEASURED as REGIME
 
     assert len(MEASURED) == 23
 
-    # the two modules must be describing the same run: hierarchy's within-rack columns
+    # the two modules must be describing the same run: hierarchy's within-supernode columns
     # are hostregime's world-16 rows, to the digit
     w16 = [(r[1], r[2], r[3]) for r in REGIME if r[0] == 16]
     assert len(w16) == len(MEASURED)
@@ -854,17 +854,17 @@ def test_the_rack_boundary_is_the_first_measured_ratio_above_the_flat_one():
     for n in (3, 4, 5, 6):
         assert 2.4 < hierarchy_ratio("percall", n) < 2.7
 
-    # within a rack the machine is the flat one this repository already measured;
-    # across racks it is not
+    # within a supernode the machine is the flat one this repository already measured;
+    # across supernodes it is not
     assert marginal_gbps("within", "percall") == pytest.approx(102, abs=2)
     assert marginal_gbps("across", "percall") == pytest.approx(40, abs=2)
     assert remote_tier_gbps("within") / remote_tier_gbps("across") == pytest.approx(
         3.54, abs=0.1)
 
-    # it clears the byte criterion at every quota, with a whole rack as the fast domain
-    assert CARDS_PER_RACK == 128
+    # it clears the byte criterion at every quota, with a whole supernode as the fast domain
+    assert CARDS_PER_SUPERNODE == 128
     for q in range(2, 9):
-        assert hierarchy_ratio() > byte_breakeven_at_rack(q)
+        assert hierarchy_ratio() > byte_breakeven_at_supernode(q)
 
     # and lands between the two implementation thresholds, which is the finding: the
     # topology is good enough and the arrival chain is what decides
@@ -926,6 +926,40 @@ def test_alpha_16_is_a_fitted_artefact_not_a_measurement():
     assert tab[16] == 0.157
 
 
+def test_the_peer_count_effect_is_not_there_when_measured_directly():
+    """The hypothesis sim/tiers.py raised, and the measurement that killed it.
+
+    Deconvolved all-to-alls suggested a tier delivers more per card when its bytes are
+    spread over more peers, which would charge two-hop specifically: Hop A runs at
+    world = group count and so has the fewest peers of anything in the scheme. That was
+    the open risk against the supernode-boundary verdict, and the module named the
+    measurement that would settle it.
+
+    Measured directly -- split sizes arranged so every card sends only across the
+    boundary, nothing to deconvolve -- per-card bandwidth is flat over a sixty-fourfold
+    change in spread. So the effect is an artefact of the deconvolution, and the charge
+    against two-hop is withdrawn. What survives is that the deconvolution itself is not
+    to be trusted, which is why the composition below is still not adopted.
+    """
+    from sim.tiers import (PEER_SWEEP, measured_cross_supernode_gbps,
+                           peer_effect_span)
+
+    assert len(PEER_SWEEP) == 21
+    peers = sorted({n for n, _b, _t in PEER_SWEEP})
+    assert peers == [1, 2, 4, 8, 16, 32, 64]
+
+    # flat: the whole sweep sits inside a few percent, over a 64x change in spread
+    assert peer_effect_span() < 1.05, (
+        "per-card cross-supernode bandwidth now varies by %.1f%% across the peer sweep; "
+        "if a real peer-count effect has appeared, sim/tiers.py has to be rewritten "
+        "rather than corrected" % (100 * (peer_effect_span() - 1)))
+
+    vals = [measured_cross_supernode_gbps(n) for n in peers]
+    assert all(7.0 < v < 9.0 for v in vals), vals
+    # and specifically the regime Hop A runs in is not penalised
+    assert measured_cross_supernode_gbps(1) > 0.95 * measured_cross_supernode_gbps(64)
+
+
 def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
     """A structural improvement that was tested and only partly adopted.
 
@@ -939,7 +973,7 @@ def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
     two-hop specifically: Hop A spreads the slow tier over the fewest peers of anything
     in the scheme, and at a coarse hierarchy that is below anything measured.
     """
-    from sim.tiers import (CROSS_RACK_8_PEERS_UNCONTENDED, OUT_OF_SAMPLE,
+    from sim.tiers import (CROSS_SUPERNODE_8_PEERS_UNCONTENDED, OUT_OF_SAMPLE,
                            TIER_BY_PEERS, Topology, compose, hop_a_peer_count,
                            peer_counts, tier_at)
 
@@ -947,9 +981,9 @@ def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
     # the peer counts are arithmetic and must reproduce every measured configuration
     assert peer_counts(topo, 8, 1) == {"intra_node": 7}
     assert peer_counts(topo, 16, 2) == {"intra_node": 7, "cross_node": 8}
-    assert peer_counts(topo, 16, 1) == {"intra_node": 7, "cross_rack": 8}
+    assert peer_counts(topo, 16, 1) == {"intra_node": 7, "cross_supernode": 8}
     assert peer_counts(topo, 128, 8) == {"intra_node": 7, "cross_node": 56,
-                                         "cross_rack": 64}
+                                         "cross_supernode": 64}
     assert peer_counts(topo, 128, 16) == {"intra_node": 7, "cross_node": 120}
     for world, npr in ((8, 1), (16, 1), (16, 2), (128, 8), (128, 16)):
         assert sum(peer_counts(topo, world, npr).values()) == world - 1
@@ -958,7 +992,7 @@ def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
     intra = TIER_BY_PEERS[("intra_node", 7)]
     fixed = {"intra_node": intra,
              "cross_node": TIER_BY_PEERS[("cross_node", 8)],
-             "cross_rack": TIER_BY_PEERS[("cross_rack", 8)]}
+             "cross_supernode": TIER_BY_PEERS[("cross_supernode", 8)]}
     pred = compose(peer_counts(topo, 128, 8), fixed)
     assert pred == pytest.approx(OUT_OF_SAMPLE["predicted_gbps"], abs=0.6)
     err = pred / OUT_OF_SAMPLE["measured_gbps"] - 1
@@ -969,20 +1003,20 @@ def test_pricing_a_collective_from_its_tiers_fails_out_of_sample():
 
     # and the reason: both tiers deliver more per card at more peers
     assert TIER_BY_PEERS[("cross_node", 120)] > TIER_BY_PEERS[("cross_node", 8)]
-    assert TIER_BY_PEERS[("cross_rack", 64)] > TIER_BY_PEERS[("cross_rack", 8)]
+    assert TIER_BY_PEERS[("cross_supernode", 64)] > TIER_BY_PEERS[("cross_supernode", 8)]
     # peer spread and concurrent load are separate: same peers, different company
-    assert CROSS_RACK_8_PEERS_UNCONTENDED > 1.8 * TIER_BY_PEERS[("cross_rack", 8)]
+    assert CROSS_SUPERNODE_8_PEERS_UNCONTENDED > 1.8 * TIER_BY_PEERS[("cross_supernode", 8)]
 
     # interpolation is allowed between measured peer counts and refused below them,
     # which is exactly the regime Hop A runs in
-    assert TIER_BY_PEERS[("cross_rack", 8)] < tier_at("cross_rack", 24) < TIER_BY_PEERS[("cross_rack", 64)]
+    assert TIER_BY_PEERS[("cross_supernode", 8)] < tier_at("cross_supernode", 24) < TIER_BY_PEERS[("cross_supernode", 64)]
     with pytest.raises(ValueError):
-        tier_at("cross_rack", 1)
+        tier_at("cross_supernode", 1)
     assert hop_a_peer_count(2) == 1 and hop_a_peer_count(16) == 15
 
 
 def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
-    """Contention at the rack boundary, and which way it points.
+    """Contention at the supernode boundary, and which way it points.
 
     A single crossing pair is the least contended case there is, so the first ratio
     measured was optimistic about the slow side -- which means it understated the
@@ -995,9 +1029,10 @@ def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
     side and two-hop exists to send fewer bytes across the slow side.
     """
     from sim.calibrate import BETA_FLAT
-    from sim.hierarchy import (CONTENTION, CROSS_RACK_WORLD128_GBPS, LOADED_RATIO,
+    from sim.hierarchy import (BOUNDARIES_DIFFER_BY, CONTENTION,
+                               CROSS_SUPERNODE_WORLD128_GBPS, LOADED_RATIO,
                                clears_at_hidden_width, contention_penalty,
-                               hierarchy_ratio, loaded_ratio)
+                               hierarchy_ratio, loaded_ratio, shallowest_boundary)
 
     d = dict(CONTENTION)
     # a single pair gets more than its share, and the penalty lands in one step
@@ -1010,16 +1045,25 @@ def test_the_boundary_does_not_collapse_under_load_and_that_favours_two_hop():
             "%d pairs moved %.1f%% from 2 -- if the boundary starts collapsing, the "
             "verdict this module records has to be retaken" % (n, 100 * abs(d[n] - d[2]) / d[2]))
 
-    # the loaded ratio is the like-for-like one and is larger than the single-pair one
-    assert loaded_ratio() == pytest.approx(LOADED_RATIO, abs=0.01)
-    assert loaded_ratio() == pytest.approx(BETA_FLAT / CROSS_RACK_WORLD128_GBPS, rel=1e-6)
-    assert loaded_ratio() > hierarchy_ratio(), (
-        "contention makes the hierarchy deeper, not shallower")
+    # the loaded ratio is the like-for-like one and is deeper than the single-pair one
+    for pair, r in LOADED_RATIO.items():
+        assert loaded_ratio(pair) == pytest.approx(r, abs=0.02)
+        assert loaded_ratio(pair) == pytest.approx(
+            BETA_FLAT / CROSS_SUPERNODE_WORLD128_GBPS[pair], rel=1e-6)
+        assert loaded_ratio(pair) > hierarchy_ratio(), (
+            "%s: contention makes the hierarchy deeper, not shallower" % pair)
 
-    # and it clears the operator-chain threshold at the widths real models use
+    # the machine has more than one boundary and they are not the same, so a verdict
+    # has to use the shallowest rather than "the" ratio
+    assert shallowest_boundary() == min(loaded_ratio(p) for p in LOADED_RATIO)
+    deep = max(LOADED_RATIO.values()) / min(LOADED_RATIO.values())
+    assert deep == pytest.approx(BOUNDARIES_DIFFER_BY, abs=0.02)
+    assert deep > 1.4, "the two boundaries used to differ by 1.48x"
+
+    # even the shallowest clears the operator-chain threshold at the reference width
     rows = clears_at_hidden_width()
-    assert [H for H, _b, ok in rows if ok] == [4096, 8192]
-    assert not any(ok for H, _b, ok in rows if H <= 2048)
+    assert [H for H, _b, ok in rows if ok] == [2048, 4096, 8192]
+    assert not rows[0][2], "H=1024 should still not clear"
 
 
 def test_the_host_regime_decides_which_rule_a_collective_obeys():
@@ -1193,7 +1237,7 @@ def test_the_overlap_form_fits_better_and_is_still_not_adopted():
 
     # the shipped model is still the additive one, and core.py still implements it.
     # The tolerance is the 48-point log-spaced table calibrate.saturating_beta samples
-    # the analytic curve into, not slack in the identity: the table tracks the exact
+    # the analytic curve into, not slack in the identity: the table tsupernodes the exact
     # form to better than a tenth of a percent over the range the model is used in,
     # and this assertion is what would notice if that grid were ever coarsened.
     from sim.calibrate import BETA_FLAT, X_HALF_FLAT, flat_supernode

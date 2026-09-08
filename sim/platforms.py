@@ -13,7 +13,7 @@ registry is what makes the coverage visible -- including its gaps.
 
 ## Coverage today
 
-Platform A's ratio of 1.03 is measured **inside one rack**, which is where every
+Platform A's ratio of 1.03 is measured **inside one supernode**, which is where every
 end-to-end verdict in docs/03 was taken and where the machine is genuinely flat. The
 same machine has a boundary above that: it is two racks, and crossing between them was
 measured on 2026-09-06 at a ratio of **2.55** (`sim/hierarchy.py`). That is the first
@@ -198,11 +198,12 @@ def main() -> None:
           % (c["n_platforms"], c["targets_total"], c["n_ratio_measured"],
              c["ratio_min"], c["ratio_max"]))
     if not c["spans_hierarchical"]:
-        from .hierarchy import hierarchy_ratio
+        from .hierarchy import CROSS_SUPERNODE_WORLD128_GBPS, loaded_ratio
         print("**No registered platform has a ratio above 1.5.** The synthetic rows")
-        print("below are sensitivities, not predictions. One measured point does now")
-        print("exist off this registry: the same machine's rack boundary, at %.2f"
-              % hierarchy_ratio())
+        print("below are sensitivities, not predictions. Two measured points do now")
+        print("exist off this registry: the same machine's two supernode boundaries,")
+        print("at %.2f and %.2f" % tuple(sorted(loaded_ratio(p) for p in
+                                                CROSS_SUPERNODE_WORLD128_GBPS)))
         print("(sim/hierarchy.py). It is a measured ratio, not a calibrated platform --")
         print("alpha past world 128 is unsupported, so it is not registered here.")
 

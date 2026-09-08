@@ -10,25 +10,47 @@ Hop A on the pure slow tier and a Hop B on the pure fast tier. Those are three d
 mixtures of physical links, and each gets a beta calibrated on a fourth.
 
 The obvious fix is to price a collective from the topology. Count how many of a rank's
-peers sit at each tier -- inside its node, elsewhere in its rack, in another rack -- and
+peers sit at each tier -- inside its node, elsewhere in its supernode, in another supernode -- and
 compose the transfer from per-tier link bandwidths:
 
     1 / beta_eff  =  sum over tiers of  (peers at tier / total peers) / beta_tier
 
-Three constants for a two-rack machine instead of one per configuration, and adding a
+Three constants for a two-supernode machine instead of one per configuration, and adding a
 boundary becomes one more constant rather than a new kind of level.
+
+> **Refuted, and by the measurement this module asked for (2026-09-08).** The
+> peer-count effect described below was inferred from deconvolved all-to-alls, and the
+> module said the thing to do was measure the cross-supernode tier directly at one, two and
+> four peers per card under load. That was run on a second supernode pair, with split sizes
+> arranged so **every card sends only across the boundary** -- no intra-supernode traffic, so
+> nothing to deconvolve. Per-card cross-supernode bandwidth is **flat**: 7.82 GB/s at one
+> peer rising to 8.03 at sixty-four, 2.6% over a sixty-fourfold change in spread, with
+> most repeats agreeing to under 1%.
+>
+> So the peer-count dependence is an artefact of the deconvolution, not a property of
+> the fabric, and the two consequences point in opposite directions. **The charge
+> against two-hop is withdrawn**: Hop A running at one cross-supernode peer gets the same
+> per-card bandwidth as an all-to-all spread over sixty-four, so the coarsest hierarchy
+> costs it nothing, and the open risk against the supernode-boundary verdict is closed. But
+> **the -31% out-of-sample failure below still stands and now has no explanation**; what
+> it indicts is the deconvolution that produced the tier numbers, which is the one step
+> in this module that assumes anything.
+>
+> The sections below are kept as written, because the reasoning they record is how the
+> measurement got specified, and because a hypothesis that survived two tiers of
+> indirect evidence and died on the first direct one is worth leaving visible.
 
 ## It works within a world and fails across worlds
 
 Calibrated on the world-16 configurations, the composition predicts **23.4 GB/s** for a
-world-128 all-to-all spanning both racks. The measurement is **33.9**. Thirty-one
+world-128 all-to-all spanning both supernodes. The measurement is **33.9**. Thirty-one
 percent out, in the direction of predicting the machine slower than it is.
 
 So a fixed bandwidth per tier does not compose either, and the reason is visible once
 the implied tier bandwidth is read back out of each configuration:
 
     cross-node   103.0 GB/s at   8 peers      118.9 GB/s at 120 peers
-    cross-rack    13.3 GB/s at   8 peers       20.0 GB/s at  64 peers
+    cross-supernode    13.3 GB/s at   8 peers       20.0 GB/s at  64 peers
 
 **A tier delivers more per card when the collective spreads its bytes over more peers
 at that tier**, and the pattern holds on both tiers independently. Physically this is
@@ -36,7 +58,7 @@ path diversity and link filling: eight flows do not occupy a fabric that sixty-f
 flows do.
 
 A second variable is separable in the same data. Holding peers fixed at eight and
-varying only how many nodes cross the boundary concurrently, cross-rack falls from
+varying only how many nodes cross the boundary concurrently, cross-supernode falls from
 25.9 GB/s alone to 13.3 under an eightfold load (`sim/hierarchy.py`). So the delivered
 bandwidth at a tier depends on **how widely the bytes are spread and how much company
 they have**, and the model has a term for neither.
@@ -54,7 +76,7 @@ it is good for is stating precisely what is missing, which the numbers above now
 
 Fitting the peer-count dependence is possible -- both tiers fit
 `beta = beta_inf * n/(n + n_half)`, the same saturating shape the model already uses for
-message size, with n_half near 5 for cross-rack and near 1 for cross-node -- but on two
+message size, with n_half near 5 for cross-supernode and near 1 for cross-node -- but on two
 points per tier that is an interpolation with no degrees of freedom left to test it. It
 is written down as a hypothesis with the measurement that would falsify it, not shipped
 as a calibration.
@@ -64,13 +86,13 @@ as a calibration.
 Hop A runs at world = number of groups, so it spreads the slow tier's bytes over the
 fewest peers of any collective in the scheme. One hop over the full fabric spreads the
 same tier over the most. The peer-count effect therefore charges two-hop and credits
-one-hop, and it does so hardest exactly where the hierarchy is coarsest: a two-rack
-machine gives Hop A a single cross-rack peer.
+one-hop, and it does so hardest exactly where the hierarchy is coarsest: a two-supernode
+machine gives Hop A a single cross-supernode peer.
 
-That is not priced anywhere, it points against the method, and it is the first thing to
-measure before the rack-boundary verdict in `sim/hierarchy.py` is treated as settled.
-The measurement is cheap and specific: the cross-rack tier at one, two and four peers
-per card under full load.
+That was not priced anywhere, it pointed against the method, and it was named as the
+first thing to measure before the supernode-boundary verdict in `sim/hierarchy.py` could be
+treated as settled. **It has now been measured and it is not there**: see the correction
+at the top. Hop A pays nothing for running at one peer.
 """
 from __future__ import annotations
 
@@ -84,17 +106,53 @@ TIER_BY_PEERS = {
     ("intra_node", 7): 101.1,
     ("cross_node", 8): 103.0,
     ("cross_node", 120): 118.9,
-    ("cross_rack", 8): 13.3,      # under an eightfold crossing load
-    ("cross_rack", 64): 20.0,     # under full load, world 128 across both racks
+    ("cross_supernode", 8): 13.3,      # under an eightfold crossing load
+    ("cross_supernode", 64): 20.0,     # under full load, world 128 across both supernodes
 }
 
 #: The same tier at the same peer count, alone rather than in company. The pair with
-#: ("cross_rack", 8) above is what isolates concurrent pressure from peer spread.
-CROSS_RACK_8_PEERS_UNCONTENDED = 25.9
+#: ("cross_supernode", 8) above is what isolates concurrent pressure from peer spread.
+CROSS_SUPERNODE_8_PEERS_UNCONTENDED = 25.9
+
+#: The direct test, 2026-09-08, on the pool110/pool12 boundary: (peers per card, total
+#: send bytes per rank, ms). Split sizes are arranged so a card sends ONLY across the
+#: boundary, to exactly this many peers, and receives from as many; each card sends
+#: bytes/2 across at every peer count, so the load on the boundary is identical along
+#: the sweep and the only variable is how widely it is spread. Nothing is deconvolved.
+#: Produced by bench/xsupernode_peers.py.
+PEER_SWEEP = [
+    (1, 67108864, 4.7749), (2, 67108864, 4.7243), (4, 67108864, 4.7307),
+    (8, 67108864, 4.7510), (16, 67108864, 4.7711), (32, 67108864, 4.8775),
+    (64, 67108864, 5.1810),
+    (1, 134217728, 9.0566), (2, 134217728, 8.9636), (4, 134217728, 8.9986),
+    (8, 134217728, 8.9874), (16, 134217728, 9.0236), (32, 134217728, 9.1272),
+    (64, 134217728, 9.3504),
+    (1, 268435456, 17.6363), (2, 268435456, 17.4453), (4, 268435456, 17.4877),
+    (8, 268435456, 17.4413), (16, 268435456, 17.4614), (32, 268435456, 17.5515),
+    (64, 268435456, 17.7128),
+]
+
+
+def measured_cross_supernode_gbps(peers: int) -> float:
+    """Per-card cross-supernode bandwidth at a peer count, marginal between the two largest
+    sizes so the fixed cost drops out. Flat to 2.6% over the whole sweep."""
+    a = dict(((n, b), t) for n, b, t in PEER_SWEEP)
+    lo, hi = 134217728, 268435456
+    return (hi - lo) / 2.0 / ((a[(peers, hi)] - a[(peers, lo)]) * 1e-3) / 1e9
+
+
+def peer_effect_span() -> float:
+    """Ratio of the best to the worst cross-supernode bandwidth across the peer sweep.
+
+    If a peer-count effect existed this would be large; it is 1.026. Kept as a function
+    so a test can assert the flatness rather than a stored number.
+    """
+    vals = [measured_cross_supernode_gbps(n) for n in (1, 2, 4, 8, 16, 32, 64)]
+    return max(vals) / min(vals)
 
 #: What the composition predicted for the configuration it had not seen, and what that
 #: configuration measured. Kept as data because the gap is the finding.
-OUT_OF_SAMPLE = {"config": "world 128 across both racks",
+OUT_OF_SAMPLE = {"config": "world 128 across both supernodes",
                  "predicted_gbps": 23.4, "measured_gbps": 33.9}
 
 
@@ -102,34 +160,34 @@ OUT_OF_SAMPLE = {"config": "world 128 across both racks",
 class Topology:
     """Enough of a machine to say which links a collective crosses."""
     cards_per_node: int = 8
-    nodes_per_rack: int = 16
-    racks: int = 2
+    nodes_per_supernode: int = 16
+    supernodes: int = 2
 
     @property
     def cards_per_rack(self) -> int:
-        return self.cards_per_node * self.nodes_per_rack
+        return self.cards_per_node * self.nodes_per_supernode
 
 
-def peer_counts(topo: Topology, world: int, nodes_per_rack_used: int = None) -> dict:
+def peer_counts(topo: Topology, world: int, nodes_per_supernode_used: int = None) -> dict:
     """How many of a rank's ``world - 1`` peers sit at each tier.
 
-    Exact arithmetic, no calibration. ``nodes_per_rack_used`` says how the world is laid
-    out when it does not fill the machine: a world of 16 can be two nodes of one rack or
+    Exact arithmetic, no calibration. ``nodes_per_supernode_used`` says how the world is laid
+    out when it does not fill the machine: a world of 16 can be two nodes of one supernode or
     one node in each of two, and those traverse entirely different links. Default packs
-    racks in turn, which is what a scheduler does unless told otherwise.
+    supernodes in turn, which is what a scheduler does unless told otherwise.
     """
     n = topo.cards_per_node
-    per_rack = (nodes_per_rack_used if nodes_per_rack_used is not None
-                else min(topo.nodes_per_rack, max(1, world // n)))
+    per_rack = (nodes_per_supernode_used if nodes_per_supernode_used is not None
+                else min(topo.nodes_per_supernode, max(1, world // n)))
     cards_here = min(world, per_rack * n)
     intra = min(n, world) - 1
     cross_node = max(0, cards_here - n) if world > n else 0
-    cross_rack = max(0, world - cards_here)
+    cross_supernode = max(0, world - cards_here)
     out = {"intra_node": intra}
     if cross_node:
         out["cross_node"] = cross_node
-    if cross_rack:
-        out["cross_rack"] = cross_rack
+    if cross_supernode:
+        out["cross_supernode"] = cross_supernode
     assert sum(out.values()) == world - 1, (out, world)
     return out
 
@@ -181,10 +239,10 @@ def main() -> None:
     print()
     print("%-34s %s" % ("configuration", "peers by tier"))
     for label, world, npr in (("world 8, one node", 8, 1),
-                              ("world 16, two nodes one rack", 16, 2),
-                              ("world 16, one node per rack", 16, 1),
-                              ("world 128, 8 nodes per rack", 128, 8),
-                              ("world 128, one full rack", 128, 16)):
+                              ("world 16, two nodes one supernode", 16, 2),
+                              ("world 16, one node per supernode", 16, 1),
+                              ("world 128, 8 nodes per supernode", 128, 8),
+                              ("world 128, one full supernode", 128, 16)):
         print("%-34s %s" % (label, peer_counts(topo, world, npr)))
     print()
     print("A fixed bandwidth per tier, calibrated on world 16 and asked about world 128:")
@@ -193,12 +251,12 @@ def main() -> None:
              100 * (OUT_OF_SAMPLE["predicted_gbps"] / OUT_OF_SAMPLE["measured_gbps"] - 1)))
     print()
     print("because a tier delivers more when more peers use it:")
-    for tier in ("cross_node", "cross_rack"):
+    for tier in ("cross_node", "cross_supernode"):
         pts = sorted((p, b) for (t, p), b in TIER_BY_PEERS.items() if t == tier)
         print("   %-12s %s" % (tier, "   ".join("%6.1f GB/s at %3d peers" % (b, p)
                                                 for p, b in pts)))
-    print("   cross_rack at 8 peers is %.1f alone against %.1f in company, so peer"
-          % (CROSS_RACK_8_PEERS_UNCONTENDED, TIER_BY_PEERS[("cross_rack", 8)]))
+    print("   cross_supernode at 8 peers is %.1f alone against %.1f in company, so peer"
+          % (CROSS_SUPERNODE_8_PEERS_UNCONTENDED, TIER_BY_PEERS[("cross_supernode", 8)]))
     print("   spread and concurrent load are separate effects and both are unmodelled.")
     print()
     print("What it costs two-hop: Hop A runs at world = group count, so it spreads the")

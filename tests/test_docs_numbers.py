@@ -232,36 +232,35 @@ claim("docs/05-simulator.md",
       "burst data, 0.114 ms at world 8 and {n} at world 16, lands near",
       lambda: [_regime_alpha()[16]], 0.001)
 
-# -- docs/03: the measured rack boundary ------------------------------------
+# -- docs/03: the measured supernode boundaries -----------------------------
 
 claim("docs/03-applicability.md",
-      "delivers {n} GB/s within a rack and {n} across, a **measured hierarchy ratio "
-      "of {n}**",
-      lambda: [_rack()[0], _rack()[1], _rack()[2]], 0.6)
+      "| pool110 / pool111 | {n} | **{n}** | | pool110 / pool12 | {n} | **{n}** |",
+      lambda: _boundaries(), 0.02)
 
 claim("docs/03-applicability.md",
-      "puts the pure tiers at {n} against {n} GB/s, a ratio of {n}.",
-      lambda: [_rack()[3], _rack()[4], _rack()[5]], 0.6)
+      "the two pairs differ by {n}×, so any verdict should use the shallower, {n}.",
+      lambda: _differ(), 0.02)
 
 claim("docs/03-applicability.md",
-      "| per-card cross-rack GB/s | {n} | {n} | {n} | {n} |",
+      "{n} GB/s per card with one pair, then {n}, {n} and {n} at two, four and eight",
       lambda: [bw for _n, bw in _contention()], 0.05)
 
 claim("docs/03-applicability.md",
-      "delivers {n} GB/s inside a rack (the shipped constant) against **{n} GB/s "
-      "measured across both**, a ratio of **{n}**",
-      lambda: _loaded(), 0.02)
-
-claim("docs/03-applicability.md",
-      "| threshold, measured operator chain | {n} | {n} | **{n}** | **{n}** |",
-      lambda: [be for _H, be, _ok in _hw()], 0.006)
+      "per-card bandwidth is {n} GB/s at one peer and {n} at sixty-four",
+      lambda: _peer_ends(), 0.02)
 
 claim("docs/05-simulator.md",
-      "| cross-node | {n} GB/s | {n} GB/s at 120 | | cross-rack | {n} GB/s | {n} GB/s at 64 |",
+      "| cross-node | {n} GB/s | {n} GB/s at 120 | "
+      "| cross-supernode | {n} GB/s | {n} GB/s at 64 |",
       lambda: _tier_table(), 0.05)
 
 claim("docs/05-simulator.md",
-      "it predicts {n} GB/s for a world-128 all-to-all spanning both racks; the "
+      "cross-supernode bandwidth is {n} GB/s at one peer and {n} at sixty-four",
+      lambda: _peer_ends(), 0.02)
+
+claim("docs/05-simulator.md",
+      "it predicts {n} GB/s for a world-128 all-to-all spanning both supernodes; the "
       "measurement is {n}.",
       lambda: _oos(), 0.05)
 
@@ -447,7 +446,7 @@ def _corpusC_fit():
 def _tier_table():
     from sim.tiers import TIER_BY_PEERS as T
     return [T[("cross_node", 8)], T[("cross_node", 120)],
-            T[("cross_rack", 8)], T[("cross_rack", 64)]]
+            T[("cross_supernode", 8)], T[("cross_supernode", 64)]]
 
 
 def _oos():
@@ -460,23 +459,20 @@ def _contention():
     return CONTENTION
 
 
-def _loaded():
-    from sim.calibrate import BETA_FLAT
-    from sim.hierarchy import CROSS_RACK_WORLD128_GBPS, loaded_ratio
-    return [BETA_FLAT, CROSS_RACK_WORLD128_GBPS, loaded_ratio()]
+def _boundaries():
+    from sim.hierarchy import CROSS_SUPERNODE_WORLD128_GBPS as G, loaded_ratio
+    return [G["pool110/pool111"], loaded_ratio("pool110/pool111"),
+            G["pool110/pool12"], loaded_ratio("pool110/pool12")]
 
 
-def _hw():
-    from sim.hierarchy import clears_at_hidden_width
-    return clears_at_hidden_width()
+def _differ():
+    from sim.hierarchy import BOUNDARIES_DIFFER_BY, shallowest_boundary
+    return [BOUNDARIES_DIFFER_BY, shallowest_boundary()]
 
 
-def _rack():
-    """within GB/s, across GB/s, ratio, tier within, tier across, tier ratio."""
-    from sim.hierarchy import hierarchy_ratio, marginal_gbps, remote_tier_gbps
-    tw, ta = remote_tier_gbps("within"), remote_tier_gbps("across")
-    return [marginal_gbps("within", "percall"), marginal_gbps("across", "percall"),
-            hierarchy_ratio(), tw, ta, tw / ta]
+def _peer_ends():
+    from sim.tiers import measured_cross_supernode_gbps as f
+    return [f(1), f(64)]
 
 
 def _chain_sweep_ms():
