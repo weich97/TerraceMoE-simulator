@@ -7,6 +7,10 @@ all-to-all after calibrating it on the target machine. It is not a training-thro
 predictor: the step-level gate fails. The repository also contains **T-Route**
 (hierarchy-aligned routing constraints) and a reference **T-A2A** two-hop path.
 
+**Paper:** [arXiv:2608.27874](https://arxiv.org/abs/2608.27874). This repository is the
+artifact, and it is the living one: see [Citing this work](#citing-this-work) for what
+has moved since v1.
+
 ![Where hierarchical dispatch pays off](docs/assets/f13-platform-map.svg)
 
 The figure is a ratio-only sensitivity map. Run `python -m sim.platforms` to reproduce
@@ -220,13 +224,13 @@ constant, which is why this repository makes no claim about clusters past 128 ra
 | Path | Contents | Status |
 |---|---|---|
 | `terrace/routing.py` | T-Route reference implementation; all four ablation modes switch inside one function | **Validated** (quality ablation + property tests) |
-| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 406 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
+| `terrace/ta2a*.py` | T-A2A two-hop chain: planning, dispatch, packing, differentiable seam | **Validated bit-exact** (guarded by the repo's 409 CPU tests; end-to-end measured only on a flat supernode, see the criterion) |
 | `terrace/ops/` | Arrival-chain fused kernels (AscendC): passthrough / K1 / K2 + executable CPU spec | passthrough passes bit-exact validation on device; **K1 algorithm proven correct, but the device-side translation has one unfixed multi-core scalar-write visibility bug (the earlier out-of-bounds is fixed); K2 not validated on hardware** (see [docs/04-kernel-status.md](docs/04-kernel-status.md)) |
 | `sim/` | Cost model: cluster spec → one-hop/two-hop times, breakeven maps, Monte Carlo uncertainty bands, expert-FFN roofline, platform registry and the target checklist (see [docs/05-simulator.md](docs/05-simulator.md)) | **Tier-1 and Tier-1b gates passed** (4.1% median on C1; 1.9%/9.3%/8.0% on C2-C4, with C3 a same-corpus B fit and C4 the post-freeze A holdout); a world-8 drift probe fails and is not retuned. Tier-2 fails, so step-level extrapolation is banned. |
 | `sim/machine.py`, `sim/codesign.py`, `sim/envelope.py`, `sim/archsearch.py`, `sim/record.py` | Co-design layer: the same cost terms turned around — which architectures a machine runs well. Machine/implementation descriptors, per-architecture step breakdown, the model-size band a cluster is good at, a capacity-constrained architecture search, and the one controlled comparison the published record permits (`python -m sim.codesign` / `sim.envelope` / `sim.archsearch` / `sim.record`) | Chain model reproduces its calibration sweeps (2.9% worst case, tests pin it); **residency is unmeasured** and every verdict it touches says so ([docs/11](docs/11-residency-measurement.md)); the group-cap table is synthetic sensitivity ([docs/12](docs/12-m-quality-experiment.md)); both record checks hold, and the record cannot locate the lower edge ([docs/13](docs/13-published-mfu-record.md)) |
 | `tools/breakeven.py` | Applicability criterion (closed form; together with sim/, two independent implementations of the same ledger, cross-checked by tests) | — |
 | `bench/a2a_form_probe.py`, `bench/xrack_contention.py`, `sim/hostregime.py`, `sim/hierarchy.py` | The instrument and the measurement that settled whether a collective's fixed cost adds to its transfer or overlaps it. Both timing styles, same machine, same worlds, same sizes: the answer depends on whether the host observes each call, which is why two of this repository's own corpora had disagreed (`python -m sim.hostregime`) | **Measured**, 46 points at worlds 8 and 16; the shipped additive rule is the one an MoE dispatch is in |
-| `tests/` | 406 tests, pure CPU (no NPU needed); `test_docs_numbers.py` recomputes every derived number these docs state, and `test_cli_output_portable.py` runs each documented command against a console that cannot encode anything but ASCII | All green |
+| `tests/` | 409 tests, pure CPU (no NPU needed); `test_docs_numbers.py` recomputes every derived number these docs state, and `test_cli_output_portable.py` runs each documented command against a console that cannot encode anything but ASCII | All green |
 | `tools/onesided/` | One-sided transfer instrument: preregistered benchmark of aclshmem put vs collective a2a, plus hyper-parallel patches (free serialization + UAF, hard-coded block_dim) and EQ usage traps | Ruled a loss on the bandwidth-flat machine (best case 0.68× a2a, see [docs/08-onesided.md](docs/08-onesided.md)); the patches apply to every Ascend+shmem user |
 | `docs/` | Design docs ×5, the routing constraint explained (docs/10), full ablation results (docs/06), the Tier-2 campaign (docs/07), the one-sided verdict (docs/08), the phase model with the measurement that would calibrate it (docs/09), the residency-measurement protocol (docs/11), the preregistered group-cap experiment (docs/12), and the published-MFU literature sweep with its verdict (docs/13); figures-first | — |
 | `tools/gen_figures.py` | Result-figure generation (numbers embedded; figures reproducible) | — |
@@ -240,6 +244,48 @@ python -m pytest tests/ -q        # torch only, runs on CPU, about three minutes
 python -m sim.validate_micro      # simulator Tier-1 validation gate
 python -m sim.sweep               # cross-cluster extrapolation (gate checked at entry; all output labeled "simulated")
 ```
+
+## Citing this work
+
+> Weicheng Xue, Bingqiang Wang, Li Yuan, Huihui Zhou, Yonghong Tian.
+> *TerraceMoE: A Cost Model for Hierarchical MoE All-to-All Communication.*
+> arXiv:2608.27874, August 2026. <https://arxiv.org/abs/2608.27874>
+
+```bibtex
+@misc{xue2026terracemoe,
+  title         = {{TerraceMoE}: A Cost Model for Hierarchical {MoE} All-to-All Communication},
+  author        = {Xue, Weicheng and Wang, Bingqiang and Yuan, Li and Zhou, Huihui and Tian, Yonghong},
+  year          = {2026},
+  eprint        = {2608.27874},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DC},
+  url           = {https://arxiv.org/abs/2608.27874}
+}
+```
+
+### What has moved since v1
+
+The paper is a snapshot; this repository keeps going, and the two are allowed to differ
+only in one direction — the repository corrects itself in place and says so. Three
+things v1 states are superseded here, and each carries a dated note where it was fixed:
+
+- **The scale band past 128 ranks.** v1 reports the 512-rank ratio spanning 1.37 to 2.94
+  with the direction of the trend flipping between α treatments. Neither reproduces from
+  the shipped code: it is 1.63 to 3.12, and all four treatments rise. The refusal to
+  claim anything past 128 ranks is unchanged, but it now rests on the spread alone
+  (correction note in [docs/05](docs/05-simulator.md)).
+- **The arrival-chain decomposition.** v1 gives 2.17 ms of index work plus 0.203 ms per
+  1024 of hidden width, with the gather at 14% of the chain. Least squares over the
+  shipped sweep gives 2.11, 0.206 and 16%.
+- **Two digits of the hidden-width threshold series**, 5.96 and 2.90 against 5.95 and
+  2.89 as `sim.uncertainty.breakeven_vs_hidden_width` computes them.
+
+Three results here postdate v1 entirely and are not in the paper at all: the host-regime
+experiment that settled whether a collective's fixed cost adds to its transfer or
+overlaps it ([sim/hostregime.py](sim/hostregime.py)), the first measured hierarchy ratio
+above 1.03 and the contention curve at the rack boundary
+([sim/hierarchy.py](sim/hierarchy.py)), and the diagnosis of α(16) as a fitted artefact
+rather than a measurement ([sim/calibrate.py](sim/calibrate.py)).
 
 ## License
 

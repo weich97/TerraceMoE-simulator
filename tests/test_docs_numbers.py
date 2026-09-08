@@ -315,6 +315,19 @@ claim("README.md",
       lambda: (100 * _tier1()["median"], 100 * _tier1()["worst"]), 0.05)
 
 claim("README.md",
+      "the shipped code: it is {n} to {n}, and all four treatments rise.",
+      lambda: list(_band(512)), 0.005)
+
+claim("README.md",
+      "Least squares over the shipped sweep gives {n}, {n} and {n}%.",
+      lambda: _chain_fit() + [_chain_shares()[0]], 0.5)
+
+claim("README.md",
+      "{n} and {n} against {n} and {n} as `sim.uncertainty.breakeven_vs_hidden_width` "
+      "computes them.",
+      lambda: [5.96, 2.90, _hidden_width_series()[0], _hidden_width_series()[2]], 0.005)
+
+claim("README.md",
       "At 512 ranks they span {n} to {n},",
       lambda: list(_band(512)), 0.005)
 
